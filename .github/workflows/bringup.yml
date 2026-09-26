@@ -98,24 +98,44 @@ jobs:
       - name: Create AVD
         run: |
           set -e
-          echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
-            -n erbium -k "system-images;android-29;google_apis;arm64-v8a" -d pixel_4 \
-            || echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
-                 -n erbium -k "system-images;android-29;google_apis;arm64-v8a"
-          # find the AVD wherever avdmanager put it (varies by toolchain version)
-          AVD_DIR=$(dirname "$(find "$HOME" -name config.ini -path "*erbium.avd*" 2>/dev/null | head -1)")
-          if [ -z "$AVD_DIR" ] || [ "$AVD_DIR" = "." ]; then
-            echo "AVD not found after create — listing avd homes:"
-            ls -la "$HOME/.android/avd/" "$HOME/.config/.android/avd/" 2>/dev/null || true
-            "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" list avd || true
-            exit 1
-          fi
-          echo "AVD dir: $AVD_DIR"
-          # Fortnite + extracted natives need >2GB; default userdata is tiny
-          echo "disk.dataPartition.size=6G" >> "$AVD_DIR/config.ini"
-          cat "$AVD_DIR/config.ini"
-          # paranoia: the emulator must see it too
-          "$ANDROID_HOME/emulator/emulator" -list-avds || true
+          # avdmanager on this runner misbehaves (creates avd.name=<build> in
+          # XDG paths the emulator never searches). Create the AVD by hand —
+          # an AVD is just a config.ini + a pointer .ini next to it.
+          AVD_DIR="$ANDROID_AVD_HOME/erbium.avd"
+          mkdir -p "$AVD_DIR" "$ANDROID_AVD_HOME"
+          cat > "$AVD_DIR/config.ini" <<EOF
+          avd.id=erbium
+          avd.name=erbium
+          avd.ini.encoding=UTF-8
+          Abi.type=arm64-v8a
+          AvdId=erbium
+          Tag=google_apis
+          Tag.display=Google APIs
+          image.sysdir.1=system-images/android-29/google_apis/arm64-v8a/
+          hw.device.name=pixel_4
+          hw.device.manufacturer=Google
+          hw.cpu.arch=arm64
+          hw.cpu.ncore=4
+          hw.ramSize=2048
+          vm.heapSize=256
+          disk.dataPartition.size=6G
+          hw.lcd.density=440
+          hw.lcd.width=1080
+          hw.lcd.height=2280
+          hw.keyboard=yes
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          fastboot.forceColdBoot=yes
+          EOF
+          cat > "$ANDROID_AVD_HOME/erbium.ini" <<EOF
+          avd.ini.encoding=UTF-8
+          path=$AVD_DIR
+          path.rel=avd/erbium.avd
+          EOF
+          ls -la "$ANDROID_AVD_HOME"
+          cat "$ANDROID_AVD_HOME/erbium.ini"
+          # the emulator must see it now
+          "$ANDROID_HOME/emulator/emulator" -list-avds
 
       - name: Boot emulator (QEMU, SwiftShader)
         run: |
