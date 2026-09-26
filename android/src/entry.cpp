@@ -174,10 +174,10 @@ namespace Erbium
         // 2) Wait for the engine singleton.
         void* engine = nullptr;
         LOGI("waiting for GEngine (slot 0x%llx)...", (unsigned long long)Baked::kGEngine);
-        engine = WaitForEngineSingleton(engineBase, 300);
+        engine = WaitForEngineSingleton(engineBase, 2400);
         if (!engine)
         {
-            LOGE("GEngine never appeared — aborting (game may have failed to init)");
+            LOGE("GEngine never appeared after 40min — aborting (translation too slow or init stuck)");
             return;
         }
         LOGI("GEngine = %p", engine);
