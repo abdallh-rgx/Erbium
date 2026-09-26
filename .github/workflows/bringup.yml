@@ -38,7 +38,10 @@ permissions:
 
 jobs:
   emulator:
-    runs-on: ubuntu-24.04-arm
+    # x86_64 host: the Android emulator package only ships for linux-x86_64.
+    # The GUEST is still arm64-v8a (system-images;android-29;google_apis;arm64-v8a)
+    # — QEMU TCG translates the ARM64 game code on the x86_64 host.
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       API_LEVEL: '29' # Android 10
@@ -101,9 +104,9 @@ jobs:
             -no-window -no-audio -no-boot-anim -no-snapshot \
             -gpu swiftshader_indirect -accel off -memory 8192 -cores 4 \
             > /tmp/emulator.log 2>&1 &
-          echo "Waiting for boot (QEMU is slow — up to 25 min)..."
+          echo "Waiting for boot (QEMU TCG is slow — up to 30 min)..."
           adb wait-for-device
-          timeout 1500 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 10; done'
+          timeout 1800 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 10; done'
           adb shell getprop ro.build.version.release
           echo "Emulator booted."
 
