@@ -12,6 +12,13 @@ LIBERBIUM="${4:-build/liberbium.so}"
 
 command -v java >/dev/null || { echo "need java 17+"; exit 1; }
 
+# Absolutize everything BEFORE any cd — relative paths would break after
+# we cd into the workdir (this exact bug produced curl-23 in CI).
+IN_APK="$(realpath -m "$IN_APK")"
+OUT_APK="$(realpath -m "$OUT_APK")"
+WORK="$(realpath -m "$WORK")"
+LIBERBIUM="$(realpath -m "$LIBERBIUM")"
+
 APKTOOL_JAR="${APKTOOL_JAR:-$WORK/apktool.jar}"
 UBERSIGNER_JAR="${UBERSIGNER_JAR:-$WORK/uber-apk-signer.jar}"
 APKTOOL_VER="${APKTOOL_VER:-2.9.3}"
