@@ -15,6 +15,7 @@
 // offline by scripts/analyze_libue4.py against the exact APK shipped in CI.
 #include "offsets.h"
 #include "alog.h"
+#include "owen.h"
 #include "platform.h"
 
 #include <chrono>
@@ -31,6 +32,17 @@ namespace Erbium
     };
 
     static JavaVM* g_vm = nullptr;
+
+    // Backend (Voltronite) URL for the Owen.c redirect. On an emulator the
+    // host loopback is 10.0.2.2 — the CI runs the backend on the runner.
+    static const char* BackendUrl()
+    {
+#ifdef ERBIUM_EMULATOR
+        return "http://10.0.2.2:3551";
+#else
+        return "http://127.0.0.1:3551";
+#endif
+    }
 
     // Console command to run once the engine is up (env-tunable for CI).
     // 21.30 is Chapter 3 → Artemis_Terrain. Erbium windows picks the map by
@@ -127,6 +139,21 @@ namespace Erbium
         if (GetModuleInfo(engineName, &info))
             LOGI("engine module: %s base=0x%lx size=0x%zx path=%s",
                  engineName, (unsigned long)info.base, info.size, info.path);
+
+#ifdef ERBIUM_HAS_OWEN
+        // Install the backend redirect BEFORE any Epic HTTP request fires —
+        // login happens while the frontend loads, long before GEngine exists.
+        {
+            const char* versionStr = Baked::kRelease;
+            int rc = owen_install(engineBase, BackendUrl(),
+                                  (uint32_t)Baked::kOwenProcessRequest,
+                                  (uint16_t)Baked::kOwenGetUrlField,
+                                  (uint32_t)Baked::kOwenSetUrl,
+                                  0, 0, 0, // EOS hooks: 21.30 doesn't need them
+                                  versionStr);
+            LOGI("owen_install rc=%d (backend=%s)", rc, BackendUrl());
+        }
+#endif
 
         // Validate the bake matches the loaded lib before touching anything.
         {

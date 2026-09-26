@@ -16,12 +16,14 @@ message(STATUS "Erbium: target version ${ERBIUM_TARGET_VERSION}")
 
 add_library(erbium SHARED
     src/entry.cpp
+    src/owen.c
     src/platform.cpp
 )
 
 target_include_directories(erbium PRIVATE src Generated)
 target_compile_definitions(erbium PRIVATE
     ERBIUM_TARGET_VERSION=${ERBIUM_TARGET_VERSION}
+    ERBIUM_HAS_OWEN=1
 )
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Generated/offsets-${ERBIUM_TARGET_VERSION}.h")
     message(FATAL_ERROR "No baked offsets for ${ERBIUM_TARGET_VERSION} — run scripts/analyze_libue4.py first")

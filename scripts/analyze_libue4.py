@@ -438,6 +438,13 @@ def analyze(so_name, blob, version, out_path):
         report["GEngine"] = hex(gengine)
     print(f"[analyze] GEngine: {report.get('GEngine')}")
 
+
+    # Owen.c redirect-hook offsets (libUnreal.so ProcessRequest/SetURL),
+    # sourced from the Owen.c per-version tables. Extend as versions bake.
+    OWEN_OFFSETS = {
+        "++Fortnite+Release-21.30-CL-21088273": (0x089F02F0, 0x70, 0x089EDCF8),
+    }
+
     # 8) write the baked offsets header
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
@@ -458,6 +465,12 @@ def analyze(so_name, blob, version, out_path):
         if report.get("release_string_addr") is not None:
             f.write(f"inline constexpr uint64_t kReleaseString = {hex(report['release_string_addr'])}; // \"{report['release_string']}\"\n")
         f.write("inline constexpr const char* kConsoleCommandSymbol = \"Java_com_epicgames_unreal_GameActivity_nativeConsoleCommand\";\n")
+        owen = OWEN_OFFSETS.get(report.get("release_string"))
+        if owen:
+            f.write(f"inline constexpr uint64_t kOwenProcessRequest = {hex(owen[0])};\n")
+            f.write(f"inline constexpr uint64_t kOwenGetUrlField = {hex(owen[1])};\n")
+            f.write(f"inline constexpr uint64_t kOwenSetUrl = {hex(owen[2])};\n")
+        report["owen"] = owen and [hex(x) for x in owen]
         if gengine:
             f.write(f"inline constexpr uint64_t kGEngine = {hex(gengine)};\n")
         if console_cmd:

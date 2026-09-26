@@ -168,5 +168,10 @@
   "GAllowCommandletRendering": "0xdc80830",
   "GAllowCommandletAudio": "0xdc80831"
  },
- "GEngine": "0xde34970"
+ "GEngine": "0xde34970",
+ "owen": [
+  "0x89f02f0",
+  "0x70",
+  "0x89edcf8"
+ ]
 }
