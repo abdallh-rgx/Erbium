@@ -47,6 +47,10 @@ jobs:
       API_LEVEL: '29' # Android 10
       ABI: arm64-v8a
       NDK_VER: '27.2.12479018'
+      # pin the AVD home for BOTH avdmanager and emulator — newer cmdline-tools
+      # put AVDs under XDG (~/.config/.android/avd) while the emulator only
+      # searches $ANDROID_AVD_HOME / $ANDROID_SDK_HOME/avd / ~/.android/avd
+      ANDROID_AVD_HOME: /home/runner/.android/avd
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +114,8 @@ jobs:
           # Fortnite + extracted natives need >2GB; default userdata is tiny
           echo "disk.dataPartition.size=6G" >> "$AVD_DIR/config.ini"
           cat "$AVD_DIR/config.ini"
+          # paranoia: the emulator must see it too
+          "$ANDROID_HOME/emulator/emulator" -list-avds || true
 
       - name: Boot emulator (QEMU, SwiftShader)
         run: |
