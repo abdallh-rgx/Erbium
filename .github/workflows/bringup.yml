@@ -1,0 +1,175 @@
+name: android-bringup
+
+# Full emulator bring-up pipeline (ARM64 host runner).
+#
+# Phase flags let us iterate: each phase is independently skippable so a red
+# step never blocks validating the steps before it.
+#
+#   phase_apk:     download APK + analyze libUE4.so + patch + sign
+#   phase_install: boot emulator, install APK, launch, watch logcat
+#   phase_backend: run Voltronite + Owen.c redirect (later phases)
+#
+# Inputs:
+#   apk_url     — direct HTTP(S) URL to the Fortnite APK (XAPK also accepted)
+#   version     — human label, e.g. 18.40.0-18167774 (used for artifacts/naming)
+#   keep_alive  — minutes to keep the runner alive after the test (for live
+#                 inspection over Tailscale)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: 'Direct APK/XAPK URL (leave empty to use cached artifact)'
+        required: false
+        default: ''
+      version:
+        description: 'Version label (e.g. 18.40.0-18167774)'
+        required: false
+        default: '18.40.0-18167774'
+      keep_alive:
+        description: 'Minutes to keep runner alive after test (0 = off)'
+        required: false
+        default: '0'
+
+permissions:
+  contents: write
+
+jobs:
+  emulator:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      API_LEVEL: '29' # Android 10
+      ABI: arm64-v8a
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Tailscale (lets you SSH into this runner while it lives) ──────────
+      - name: Setup Tailscale
+        if: ${{ secrets.TAILSCALE_AUTHKEY != '' }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh || true
+          sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock &
+          sleep 2
+          sudo tailscale --socket=/tmp/tailscaled.sock up \
+            --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" \
+            --hostname="erbium-ci-${{ github.run_id }}" \
+            --accept-routes || echo "tailscale up failed (non-fatal)"
+          IP=$(sudo tailscale --socket=/tmp/tailscaled.sock ip -4 || echo '')
+          echo "RUNNER_TAILSCALE_IP=$IP" | tee -a "$GITHUB_ENV"
+
+      - name: Install base tooling
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openjdk-17-jdk-headless unzip wget curl python3-pip adb udev
+
+      # ── Android SDK + emulator (ARM64 system image, no KVM → QEMU TCG) ───
+      - name: Install Android SDK + emulator + system image
+        run: |
+          set -e
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" \
+            "system-images;android-29;google_apis;arm64-v8a" > /dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Create AVD
+        run: |
+          set -e
+          echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n erbium -k "system-images;android-29;google_apis;arm64-v8a" -d pixel_4
+
+      - name: Boot emulator (QEMU, SwiftShader)
+        run: |
+          set -e
+          nohup "$ANDROID_HOME/emulator/emulator" -avd erbium \
+            -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect -accel off -memory 3072 -cores 2 \
+            > /tmp/emulator.log 2>&1 &
+          echo "Waiting for boot (QEMU is slow — up to 25 min)..."
+          adb wait-for-device
+          timeout 1500 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 10; done'
+          adb shell getprop ro.build.version.release
+          echo "Emulator booted."
+
+      # ── APK: fetch, analyze, patch, sign ─────────────────────────────────
+      - name: Download APK
+        run: |
+          set -e
+          mkdir -p artifacts
+          if [ -n "${{ github.event.inputs.apk_url }}" ]; then
+            curl -fsSL --retry 3 -o artifacts/fortnite.apk "${{ github.event.inputs.apk_url }}"
+          else
+            echo "No apk_url provided — trying scripts/get_apk.py sources..."
+            python3 scripts/get_apk.py --version "${{ github.event.inputs.version }}" --out artifacts/fortnite.apk
+          fi
+          ls -la artifacts/
+
+      - name: Analyze libUE4.so (offline offsets)
+        run: |
+          set -e
+          python3 scripts/analyze_libue4.py \
+            --apk artifacts/fortnite.apk \
+            --version "${{ github.event.inputs.version }}" \
+            --out android/Generated/offsets.h || echo "analyzer warnings (non-fatal)"
+
+      - name: Patch APK (onCreate → loadLibrary)
+        run: |
+          set -e
+          bash scripts/patch_apk.sh artifacts/fortnite.apk artifacts/fortnite-patched.apk artifacts/analysis
+
+      - name: Install & launch
+        run: |
+          set -e
+          adb install -r artifacts/fortnite-patched.apk
+          # Clear old logcat, then launch and stream
+          adb logcat -c
+          adb shell monkey -p com.epicgames.fortnite -c android.intent.category.LAUNCHER 1 || true
+
+      - name: Watch logcat for Erbium + crashes (10 min)
+        run: |
+          set -e
+          adb logcat -d > artifacts/logcat-full.txt || true
+          # Stream for up to 10 minutes, stopping early on native crash
+          END=$((SECONDS+600))
+          while [ $SECONDS -lt $END ]; do
+            adb logcat -d >> artifacts/logcat-full.txt || true
+            if adb shell ls /data/tombstones 2>/dev/null | grep -q tombstone; then
+              echo "TOMBSTONE DETECTED"
+              adb shell su 0 ls /data/tombstones 2>/dev/null || true
+              break
+            fi
+            if grep -q "FATAL EXCEPTION\|SIGSEGV\|liberbium.*crash" artifacts/logcat-full.txt; then
+              echo "CRASH DETECTED — see artifacts"
+              break
+            fi
+            if grep -q "Erbium Android bootstrap" artifacts/logcat-full.txt; then
+              echo ">>> ERBIUM BOOTSTRAP LINE SEEN IN LOGCAT <<<"
+            fi
+            sleep 15
+          done
+          grep -E "Erbium|SIGSEGV|FATAL|tombstone|DEBUG" artifacts/logcat-full.txt | tail -100 > artifacts/logcat-erbium.txt || true
+
+      - name: Keep-alive (optional, for live SSH debugging)
+        if: ${{ github.event.inputs.keep_alive != '0' }}
+        run: |
+          echo "Runner stays alive ${{ github.event.inputs.keep_alive }} minutes."
+          echo "Tailscale IP: ${RUNNER_TAILSCALE_IP:-unknown} — ssh into it while it lasts."
+          sleep $(( ${{ github.event.inputs.keep_alive }} * 60 ))
+
+      - name: Always upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bringup-${{ github.event.inputs.version }}-${{ github.run_id }}
+          path: |
+            artifacts/
+            /tmp/emulator.log
+          if-no-files-found: warn

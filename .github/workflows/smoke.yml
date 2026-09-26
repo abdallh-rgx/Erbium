@@ -1,0 +1,65 @@
+name: android-smoke
+
+# Fast toolchain check: cross-compile the Android skeleton with the NDK.
+# Runs on x86_64 (NDK has no linux-arm64 host build) — output artifact is
+# consumed by the arm64 emulator job in android-bringup.
+
+on:
+  push:
+    branches: [android]
+    paths:
+      - 'android/**'
+      - '.github/workflows/smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ndk-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ninja
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
+
+      - name: Install Android cmdline-tools + NDK
+        run: |
+          set -e
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" > /dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "NDK_VERSION=27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Configure (arm64-v8a)
+        run: |
+          cmake -B build -S android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/$NDK_VERSION/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24
+
+      - name: Build liberbium.so
+        run: cmake --build build --parallel 2
+
+      - name: Sanity checks on the .so
+        run: |
+          set -e
+          ls -la build/liberbium.so
+          file build/liberbium.so
+          # Must be an ARM64 shared object
+          file build/liberbium.so | grep -q 'ARM aarch64' || { echo "NOT arm64!"; exit 1; }
+          # Must not link libstdc++ statically in a broken way; check needed libs
+          readelf -d build/liberbium.so | grep NEEDED || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liberbium-so
+          path: build/liberbium.so
+          if-no-files-found: error
