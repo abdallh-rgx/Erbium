@@ -228,6 +228,11 @@ jobs:
       - name: Patch APK (onCreate → loadLibrary)
         run: |
           set -e
+          df -h / /home || true
+          # reclaim disk: apt caches, sdk zips, emulator download leftovers
+          sudo apt-get clean || true
+          rm -rf "$HOME/android-sdk/.temp" "$HOME/android-sdk/*.zip" /tmp/clt.zip 2>/dev/null || true
+          df -h /
           bash scripts/patch_apk.sh artifacts/fortnite.apk artifacts/fortnite-patched.apk artifacts/analysis android/build/liberbium.so
 
       - name: Start Voltronite backend (:3551)
