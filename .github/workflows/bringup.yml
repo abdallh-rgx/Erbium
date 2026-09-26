@@ -165,6 +165,26 @@ jobs:
           set -e
           bash scripts/patch_apk.sh artifacts/fortnite.apk artifacts/fortnite-patched.apk artifacts/analysis android/build/liberbium.so
 
+      - name: Start Voltronite backend (:3551)
+        run: |
+          set -e
+          curl -fsSL https://bun.sh/install | bash
+          export PATH="$HOME/.bun/bin:$PATH"
+          git clone --depth 1 https://github.com/abdallh-rgx/Voltronite.git /tmp/voltronite
+          cd /tmp/voltronite
+          # emulator reaches the host loopback via 10.0.2.2; matchmaker ws too
+          cat > .env <<'ENV'
+          PORT=3551
+          MATCHMAKER_PORT=8080
+          GAMESERVER_IP=127.0.0.1:7777
+          MATCHMAKER_IP=ws://10.0.2.2:8080
+          ENV
+          bun install
+          nohup bun src/app.ts > /tmp/voltronite.log 2>&1 &
+          sleep 5
+          curl -s http://127.0.0.1:3551/ | head -1
+          echo "backend up"
+
       - name: Install & launch
         run: |
           set -e
@@ -222,4 +242,5 @@ jobs:
           path: |
             artifacts/
             /tmp/emulator.log
+            /tmp/voltronite.log
           if-no-files-found: warn
