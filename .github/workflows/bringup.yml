@@ -95,11 +95,21 @@ jobs:
         run: |
           set -e
           echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
-            -n erbium -k "system-images;android-29;google_apis;arm64-v8a" -d pixel_4
+            -n erbium -k "system-images;android-29;google_apis;arm64-v8a" -d pixel_4 \
+            || echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+                 -n erbium -k "system-images;android-29;google_apis;arm64-v8a"
+          # find the AVD wherever avdmanager put it (varies by toolchain version)
+          AVD_DIR=$(dirname "$(find "$HOME" -name config.ini -path "*erbium.avd*" 2>/dev/null | head -1)")
+          if [ -z "$AVD_DIR" ] || [ "$AVD_DIR" = "." ]; then
+            echo "AVD not found after create — listing avd homes:"
+            ls -la "$HOME/.android/avd/" "$HOME/.config/.android/avd/" 2>/dev/null || true
+            "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" list avd || true
+            exit 1
+          fi
+          echo "AVD dir: $AVD_DIR"
           # Fortnite + extracted natives need >2GB; default userdata is tiny
-          AVD_CFG="$HOME/.android/avd/erbium.avd/config.ini"
-          echo "disk.dataPartition.size=6G" >> "$AVD_CFG"
-          cat "$AVD_CFG"
+          echo "disk.dataPartition.size=6G" >> "$AVD_DIR/config.ini"
+          cat "$AVD_DIR/config.ini"
 
       - name: Boot emulator (QEMU, SwiftShader)
         run: |

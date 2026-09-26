@@ -85,7 +85,7 @@ src = open(path, encoding='utf-8').read()
 if 'loadLibrary("erbium")' in src or '"erbium"' in src:
     print("already patched")
     sys.exit(0)
-m = re.search(r'(\.method\s+public\s+onCreate\(Landroid/os/Bundle;\)V\s*\n(?:    \.locals[^\n]*\n)?)', src)
+m = re.search(r'(\.method\s+(?:public|protected)\s+onCreate\(Landroid/os/Bundle;\)V\s*\n(?:    \.locals[^\n]*\n)?)', src)
 if not m:
     print("ERROR: onCreate not found")
     sys.exit(1)
@@ -94,6 +94,13 @@ inject = (
     "    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V\n"
 )
 idx = m.end()
+# skip past any .annotation ... .end annotation prologue blocks — smali
+# requires annotations to precede instructions, so we must inject after them
+while True:
+    ann = re.match(r'(    \.annotation[^\n]*\n(?:.*?\n)*?    \.end annotation\n)', src[idx:])
+    if not ann:
+        break
+    idx += ann.end()
 src = src[:idx] + inject + src[idx:]
 open(path, 'w', encoding='utf-8').write(src)
 print("injected loadLibrary into onCreate")
