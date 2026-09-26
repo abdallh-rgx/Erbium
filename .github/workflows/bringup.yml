@@ -140,8 +140,10 @@ jobs:
       - name: Boot emulator (QEMU, SwiftShader)
         run: |
           set -e
-          # KVM is available on ubuntu-latest runners; x86_64 image runs native
+          # KVM is available on ubuntu-latest runners but the runner user lacks
+          # group perms — open the device (standard CI workaround)
           ls -la /dev/kvm || true
+          sudo chmod 666 /dev/kvm || true
           nohup "$ANDROID_HOME/emulator/emulator" -avd erbium \
             -no-window -no-audio -no-boot-anim -no-snapshot \
             -gpu swiftshader_indirect -memory 8192 -cores 4 \
