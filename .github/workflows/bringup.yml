@@ -5,13 +5,15 @@ name: android-bringup
 # Phase flags let us iterate: each phase is independently skippable so a red
 # step never blocks validating the steps before it.
 #
-#   phase_apk:     download APK + analyze libUE4.so + patch + sign
+#   phase_apk:     download APK + analyze libUnreal.so (bake offsets) +
+#                  build liberbium.so (NDK) + patch + sign
 #   phase_install: boot emulator, install APK, launch, watch logcat
 #   phase_backend: run Voltronite + Owen.c redirect (later phases)
 #
 # Inputs:
-#   apk_url     — direct HTTP(S) URL to the Fortnite APK (XAPK also accepted)
-#   version     — human label, e.g. 18.40.0-18167774 (used for artifacts/naming)
+#   apk_url     — direct HTTP(S) URL to the Fortnite APK (XAPK also accepted).
+#                 Empty = use the repo's release asset (see get_apk step).
+#   version     — human label, e.g. 21.30.0-21088273
 #   keep_alive  — minutes to keep the runner alive after the test (for live
 #                 inspection over Tailscale)
 
@@ -19,13 +21,13 @@ on:
   workflow_dispatch:
     inputs:
       apk_url:
-        description: 'Direct APK/XAPK URL (leave empty to use cached artifact)'
+        description: 'Direct APK/XAPK URL (leave empty to use release asset)'
         required: false
         default: ''
       version:
-        description: 'Version label (e.g. 18.40.0-18167774)'
+        description: 'Version label (e.g. 21.30.0-21088273)'
         required: false
-        default: '18.40.0-18167774'
+        default: '21.30.0-21088273'
       keep_alive:
         description: 'Minutes to keep runner alive after test (0 = off)'
         required: false
@@ -41,6 +43,7 @@ jobs:
     env:
       API_LEVEL: '29' # Android 10
       ABI: arm64-v8a
+      NDK_VER: '27.2.12479018'
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +68,7 @@ jobs:
           sudo apt-get install -y -qq openjdk-17-jdk-headless unzip wget curl python3-pip adb udev
 
       # ── Android SDK + emulator (ARM64 system image, no KVM → QEMU TCG) ───
-      - name: Install Android SDK + emulator + system image
+      - name: Install Android SDK + emulator + NDK + system image
         run: |
           set -e
           export ANDROID_HOME="$HOME/android-sdk"
@@ -75,7 +78,7 @@ jobs:
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "emulator" \
+            "platform-tools" "emulator" "ndk;${NDK_VER}" \
             "system-images;android-29;google_apis;arm64-v8a" > /dev/null
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
@@ -91,7 +94,7 @@ jobs:
           set -e
           nohup "$ANDROID_HOME/emulator/emulator" -avd erbium \
             -no-window -no-audio -no-boot-anim -no-snapshot \
-            -gpu swiftshader_indirect -accel off -memory 3072 -cores 2 \
+            -gpu swiftshader_indirect -accel off -memory 8192 -cores 4 \
             > /tmp/emulator.log 2>&1 &
           echo "Waiting for boot (QEMU is slow — up to 25 min)..."
           adb wait-for-device
@@ -99,7 +102,7 @@ jobs:
           adb shell getprop ro.build.version.release
           echo "Emulator booted."
 
-      # ── APK: fetch, analyze, patch, sign ─────────────────────────────────
+      # ── APK: fetch, analyze, build, patch, sign ───────────────────────────
       - name: Download APK
         run: |
           set -e
@@ -107,23 +110,52 @@ jobs:
           if [ -n "${{ github.event.inputs.apk_url }}" ]; then
             curl -fsSL --retry 3 -o artifacts/fortnite.apk "${{ github.event.inputs.apk_url }}"
           else
-            echo "No apk_url provided — trying scripts/get_apk.py sources..."
-            python3 scripts/get_apk.py --version "${{ github.event.inputs.version }}" --out artifacts/fortnite.apk
+            # encrypted release asset on this fork — decrypted with repo secret
+            VER="${{ github.event.inputs.version }}"
+            TAG="apk-${VER}"
+            gh release download "$TAG" --pattern "fortnite-*.apk.enc" --output artifacts/fortnite.apk.enc --repo "$GITHUB_REPOSITORY"
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:APK_CRYPT_KEY -in artifacts/fortnite.apk.enc -out artifacts/fortnite.apk
+            rm artifacts/fortnite.apk.enc
           fi
           ls -la artifacts/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK_CRYPT_KEY: ${{ secrets.APK_CRYPT_KEY }}
 
-      - name: Analyze libUE4.so (offline offsets)
+      - name: Analyze libUnreal.so (bake per-version offsets)
         run: |
           set -e
+          # version label "21.30.0-21088273" → bake id "21.30"
+          BAKE_ID=$(python3 - <<'PY'
+          import re,sys
+          v = "${{ github.event.inputs.version }}"
+          m = re.match(r"(\d+\.\d+)", v)
+          print(m.group(1) if m else "unknown")
+          PY
+          )
+          echo "BAKE_ID=$BAKE_ID" >> "$GITHUB_ENV"
           python3 scripts/analyze_libue4.py \
             --apk artifacts/fortnite.apk \
             --version "${{ github.event.inputs.version }}" \
-            --out android/Generated/offsets.h || echo "analyzer warnings (non-fatal)"
+            --out "android/Generated/offsets-${BAKE_ID}.h"
+          grep -E "kGIsClient|kGIsServer|kGEngine|kNativeConsoleCommand" "android/Generated/offsets-${BAKE_ID}.h"
+
+      - name: Build liberbium.so (NDK, arm64-v8a)
+        run: |
+          set -e
+          cd android
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/${NDK_VER}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 \
+            -DERBIUM_TARGET_VERSION="$BAKE_ID"
+          cmake --build build --verbose
+          ls -la build/liberbium.so
+          mkdir -p ../artifacts/native && cp build/liberbium.so ../artifacts/native/
 
       - name: Patch APK (onCreate → loadLibrary)
         run: |
           set -e
-          bash scripts/patch_apk.sh artifacts/fortnite.apk artifacts/fortnite-patched.apk artifacts/analysis
+          bash scripts/patch_apk.sh artifacts/fortnite.apk artifacts/fortnite-patched.apk artifacts/analysis android/build/liberbium.so
 
       - name: Install & launch
         run: |
@@ -133,12 +165,12 @@ jobs:
           adb logcat -c
           adb shell monkey -p com.epicgames.fortnite -c android.intent.category.LAUNCHER 1 || true
 
-      - name: Watch logcat for Erbium + crashes (10 min)
+      - name: Watch logcat for Erbium + crashes (15 min)
         run: |
           set -e
           adb logcat -d > artifacts/logcat-full.txt || true
-          # Stream for up to 10 minutes, stopping early on native crash
-          END=$((SECONDS+600))
+          # Stream for up to 15 minutes, stopping early on native crash
+          END=$((SECONDS+900))
           while [ $SECONDS -lt $END ]; do
             adb logcat -d >> artifacts/logcat-full.txt || true
             if adb shell ls /data/tombstones 2>/dev/null | grep -q tombstone; then
@@ -150,12 +182,22 @@ jobs:
               echo "CRASH DETECTED — see artifacts"
               break
             fi
-            if grep -q "Erbium Android bootstrap" artifacts/logcat-full.txt; then
-              echo ">>> ERBIUM BOOTSTRAP LINE SEEN IN LOGCAT <<<"
+            if grep -q "POST-FLIP" artifacts/logcat-full.txt; then
+              echo ">>> ERBIUM FLAG FLIP HAPPENED <<<"
+            fi
+            if grep -q "dispatching console command" artifacts/logcat-full.txt; then
+              echo ">>> ERBIUM OPEN COMMAND DISPATCHED <<<"
             fi
             sleep 15
           done
-          grep -E "Erbium|SIGSEGV|FATAL|tombstone|DEBUG" artifacts/logcat-full.txt | tail -100 > artifacts/logcat-erbium.txt || true
+          grep -E "Erbium|SIGSEGV|FATAL|tombstone|DEBUG|LogNet|LogWorld" artifacts/logcat-full.txt | tail -200 > artifacts/logcat-erbium.txt || true
+          # key milestone lines for the job summary
+          {
+            echo "## Erbium bring-up log digest"
+            echo '```'
+            grep -E "Erbium|POST-FLIP|dispatching|LogNet.*Listen|LogWorld.*Artemis" artifacts/logcat-full.txt | tail -50 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep-alive (optional, for live SSH debugging)
         if: ${{ github.event.inputs.keep_alive != '0' }}
