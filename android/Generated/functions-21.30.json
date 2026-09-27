@@ -1,0 +1,559 @@
+{
+ "lib": "libUnreal.so",
+ "version": "21.30.0-CL-21088273",
+ "generated_by": "scripts/find82 (see README)",
+ "summary": {
+  "resolved": 46,
+  "ambiguous": 2,
+  "todo_runtime": 45
+ },
+ "functions": [
+  {
+   "name": "InitBase",
+   "addr": "0x3851c5c",
+   "method": "vtable-slot",
+   "note": "UIpNetDriver::InitBase \u2014 vtable+0x2d8; verified: InitListen calls it first",
+   "status": "resolved"
+  },
+  {
+   "name": "InitConnect",
+   "addr": "0x38525a4",
+   "method": "vtable-slot",
+   "note": "UIpNetDriver::InitConnect \u2014 vtable+0x2e0; calls InitBase virtually",
+   "status": "resolved"
+  },
+  {
+   "name": "InitListen",
+   "addr": "0x3852a0c",
+   "method": "vtable-slot",
+   "note": "UIpNetDriver::InitListen \u2014 vtable+0x2e8; owns '%s IpNetDriver listening on port %i' log; calls InitBase \u2192 SetWorld-flow \u2192 socket GetPort into URL.Port",
+   "status": "resolved"
+  },
+  {
+   "name": "GetNetMode",
+   "addr": "0x992f0e0",
+   "method": "semantic-disasm",
+   "note": "UWorld::GetNetMode \u2014 returns NM_Client(3) when NetDriver==null; delegates to NetDriver path",
+   "status": "resolved"
+  },
+  {
+   "name": "UWorld_Listen",
+   "addr": "0x992bc7c",
+   "method": "semantic-disasm",
+   "note": "UWorld::Listen \u2014 WorldContext loop \u2192 FindNamedNetDriver flow",
+   "status": "resolved"
+  },
+  {
+   "name": "LoadMap",
+   "addr": "0x98c8bc0",
+   "method": "string-anchor",
+   "note": "UGameEngine::LoadMap \u2014 owns 'LoadMap: failed to Listen(%s)'",
+   "status": "resolved"
+  },
+  {
+   "name": "ListenCall",
+   "addr": "0x98c4e34",
+   "method": "semantic-disasm",
+   "note": "BL site calling UWorld::Listen inside LoadMap (FindListenCall equivalent \u2014 patch target)",
+   "status": "resolved"
+  },
+  {
+   "name": "FindNamedNetDriver",
+   "addr": "0x98bb050",
+   "method": "semantic-disasm",
+   "note": "UEngine::FindNamedNetDriver \u2014 iterates [Engine+0xc78] comparing [x+0x2b8] (NetDriverName FName)",
+   "status": "resolved"
+  },
+  {
+   "name": "OnRep_ZiplineState",
+   "addr": "0x65d22d0",
+   "method": "reflected-native",
+   "note": "via registration thunk 0x70acd24; verified: reads [x0+0x1a90] bIsZiplining, [x0+0x2480] ZiplineActor",
+   "status": "resolved"
+  },
+  {
+   "name": "HandlePostSafeZonePhaseChanged",
+   "addr": "0x5504ac4",
+   "method": "reflected-native",
+   "note": "big impl (sub sp,#0x160) \u2014 MegaStorm safe-zone phases; string-anchor gave the wrapper 0x55045c4",
+   "status": "resolved"
+  },
+  {
+   "name": "ActorChannelClose",
+   "addr": "0x92f8d64",
+   "method": "string-anchor",
+   "note": "UActorChannel::Close \u2014 'ChIndex: %d, Actor: %s'",
+   "status": "resolved"
+  },
+  {
+   "name": "IsNetRelevantFor",
+   "addr": "0x90784d8",
+   "method": "string-anchor",
+   "note": "AActor::IsNetRelevantFor \u2014 'no root component' log",
+   "status": "resolved"
+  },
+  {
+   "name": "CreateChannel",
+   "addr": "0x9519af0",
+   "method": "string-anchor",
+   "note": "UNetConnection::CreateChannelByName \u2014 STAT_NetConnection_CreateChannelByName",
+   "status": "resolved"
+  },
+  {
+   "name": "ReplicateActor",
+   "addr": "0x92fbd9c",
+   "method": "string-anchor",
+   "note": "UActorChannel::ReplicateActor \u2014 STAT_NetReplicateActorTime",
+   "status": "resolved"
+  },
+  {
+   "name": "SetChannelActorForDestroy",
+   "addr": "0x930cffc",
+   "method": "string-anchor",
+   "note": "'SetChannelActorForDestroy: Channel %d.'",
+   "status": "resolved"
+  },
+  {
+   "name": "SendClientAdjustment",
+   "addr": "0x921e620",
+   "method": "string-anchor",
+   "note": "UCharacterMovementComponent::SendClientAdjustment",
+   "status": "resolved"
+  },
+  {
+   "name": "HandleMatchHasStarted",
+   "addr": "0x552ab84",
+   "method": "string-anchor",
+   "note": "AFortGameModeAthena::HandleMatchHasStarted",
+   "status": "resolved"
+  },
+  {
+   "name": "SpawnInitialSafeZone",
+   "addr": "0x5505948",
+   "method": "string-anchor",
+   "note": "'bShouldSpawnSafeZoneIndicator == false' log",
+   "status": "resolved"
+  },
+  {
+   "name": "StartAircraftPhase",
+   "addr": "0x5509de8",
+   "method": "string-anchor",
+   "note": "STAT_StartAircraftPhase",
+   "status": "resolved"
+  },
+  {
+   "name": "PickTeam",
+   "addr": "0x550d590",
+   "method": "string-anchor",
+   "note": "'PickTeam for [%s] used beacon value'",
+   "status": "resolved"
+  },
+  {
+   "name": "KickPlayer",
+   "addr": "0x62b0c38",
+   "method": "string-anchor",
+   "note": "'Validation Failure: %s. kicking %s'",
+   "status": "resolved"
+  },
+  {
+   "name": "NotifyGameMemberAdded",
+   "addr": "0x556bb34",
+   "method": "string-anchor",
+   "note": "'Adding Player state with UniqueId'",
+   "status": "resolved"
+  },
+  {
+   "name": "EnterAircraft",
+   "addr": "0x5a8227c",
+   "method": "string-anchor",
+   "note": "'attempting to enter aircraft after having already exited'",
+   "status": "resolved"
+  },
+  {
+   "name": "FinishWorldInitialization",
+   "addr": "0x551ba34",
+   "method": "string-anchor",
+   "note": "'Can't find a FortAthenaMapInfo placed in map.'",
+   "status": "resolved"
+  },
+  {
+   "name": "GiveAbility",
+   "addr": "0x3176468",
+   "method": "string-anchor",
+   "note": "'GiveAbilityAndActivateOnce called on ability %s on the client' \u2014 SHARED anchor with GAEO, disambiguate by disasm before hooking",
+   "status": "resolved"
+  },
+  {
+   "name": "GiveAbilityAndActivateOnce",
+   "addr": "0x3176468",
+   "method": "string-anchor",
+   "note": "same anchor as GiveAbility \u2014 AMBIGUOUS, verify before use",
+   "status": "ambiguous"
+  },
+  {
+   "name": "InternalTryActivateAbility",
+   "addr": "0x317a94c",
+   "method": "string-anchor",
+   "note": "'InternalTryActivateAbility called with invalid Handle!'",
+   "status": "resolved"
+  },
+  {
+   "name": "InitializePlayerGameplayAbilities",
+   "addr": "0x5e81e10",
+   "method": "string-anchor",
+   "note": "'InitializePlayerGameplayAbilities with invalid PlayerStateOrProxy!'",
+   "status": "resolved"
+  },
+  {
+   "name": "InitializeBuildingActor",
+   "addr": "0x591c5e4",
+   "method": "string-anchor",
+   "note": "STAT_Fort_BuildingSMActorInitializeBuildingActor",
+   "status": "resolved"
+  },
+  {
+   "name": "ReplaceBuildingActor",
+   "addr": "0x5932630",
+   "method": "string-anchor",
+   "note": "STAT_Fort_BuildingSMActorReplaceBuildingActor",
+   "status": "resolved"
+  },
+  {
+   "name": "PayBuildableClassPlacementCost",
+   "addr": "0x665ad20",
+   "method": "string-anchor",
+   "note": "'Failed to remove item %s during pay building costs'",
+   "status": "resolved"
+  },
+  {
+   "name": "CanAffordToPlaceBuildableClass",
+   "addr": "0x665ab4c",
+   "method": "string-anchor",
+   "note": "'Resource not found! Resource Type is %i'",
+   "status": "resolved"
+  },
+  {
+   "name": "SelectAndSetupMyBuildingLevel",
+   "addr": "0x5899b90",
+   "method": "string-anchor",
+   "note": "'SelectAndSetupMyBuildingLevel - Cannot get WorldManager!!' \u2014 owner chain",
+   "status": "resolved"
+  },
+  {
+   "name": "StreamInMyBuilding",
+   "addr": "0x587ae00",
+   "method": "string-anchor",
+   "note": "'%s.%s trying to load invalid level %s' \u2014 AMBIGUOUS with SelectAndSetup region",
+   "status": "ambiguous"
+  },
+  {
+   "name": "GetPlayerViewPoint",
+   "addr": "0x55cb164",
+   "method": "string-anchor",
+   "note": "'%s failed to spawn a pawn'",
+   "status": "resolved"
+  },
+  {
+   "name": "SendRequestNow",
+   "addr": "0x36aad64",
+   "method": "string-anchor",
+   "note": "'MCP-Profile: Dispatching request to %s'",
+   "status": "resolved"
+  },
+  {
+   "name": "GameSessionPatch",
+   "addr": "0x5553e04",
+   "method": "string-anchor",
+   "note": "'Gamephase Step: %s' \u2014 containing function; the actual patch byte is the season-21 gate inside",
+   "status": "resolved"
+  },
+  {
+   "name": "QueueStatEvent",
+   "addr": "0x674a5bc",
+   "method": "string-anchor",
+   "note": "UFortQuestManager::QueueStatEvent",
+   "status": "resolved"
+  },
+  {
+   "name": "ApplyCharacterCustomization",
+   "addr": "0x66e6388",
+   "method": "string-anchor",
+   "note": "AFortPlayerState::ApplyCharacterCustomization",
+   "status": "resolved"
+  },
+  {
+   "name": "ActivatePhase",
+   "addr": "0x4863308",
+   "method": "string-anchor",
+   "note": "ASpecialEventScript::ActivatePhase",
+   "status": "resolved"
+  },
+  {
+   "name": "UnEquipVehicleWeapon",
+   "addr": "0x6a1e5dc",
+   "method": "string-anchor",
+   "note": "UFortVehicleSeatWeaponComponent::UnEquipVehicleWeapon",
+   "status": "resolved"
+  },
+  {
+   "name": "StartStreamingAdditionalPlaylistLevel",
+   "addr": "0x5e48430",
+   "method": "string-anchor",
+   "note": "'PLAYLIST: Failed to locate valid level'",
+   "status": "resolved"
+  },
+  {
+   "name": "SetState",
+   "addr": "0x618c658",
+   "method": "string-anchor",
+   "note": "'Time from Setup to InProgress: %6.2fms'",
+   "status": "resolved"
+  },
+  {
+   "name": "GetMaxTickRate",
+   "addr": "0x98bb160",
+   "method": "string-anchor",
+   "note": "'Hitching by request!' \u2014 UGameEngine::GetMaxTickRate",
+   "status": "resolved"
+  },
+  {
+   "name": "SpawnDeco",
+   "addr": "0x6a91214",
+   "method": "string-anchor",
+   "note": "AFortTrapTool::SpawnDeco \u2014 'World is tearing down'",
+   "status": "resolved"
+  },
+  {
+   "name": "ShouldAllowServerSpawnDeco",
+   "addr": "0x6a8463c",
+   "method": "string-anchor",
+   "note": "'Tried to place deco item %s %s'",
+   "status": "resolved"
+  },
+  {
+   "name": "CallPreReplication",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "CanPlaceBuildableClassInStructuralGrid",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "CantBuild",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "ClearAbility",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "ClientHasInitializedLevelFor",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "ConstructAbilitySpec",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "CreateNetDriver",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "CreateNetDriverWorldContext",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "EncryptionPatch",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "FinishedTargetSpline",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "FlushDormancy",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "GNames",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "GObjects",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "GameSessionPatchByte",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "GetNamePool",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "GetWorldContext",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "InitializeFlightPath",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "IsNetReady",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "IsNetRelevantForVft",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "ListenRedirect",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "LoadPlayset",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "MinigameSettingsBuilding__BeginPlay",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "OnItemInstanceAddedVft",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "PickSupplyDropLocation",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "PostInitializeSpawnedBuildingActor",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "PreSendUpdate",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "RemoveFromAlivePlayers",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "RemoveInventoryItem",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "RemoveInventoryStateValue",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "Reset",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SendDestructionInfo",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "ServerReplicateActors",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SetChannelActor",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SetGamePhase",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SetInventoryStateValue",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SetPickupItems",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SetPickupTarget",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SetWorld",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "ShouldAllowServerSpawnDecoVft",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SpawnDecoVft",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "SpawnLoot",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "StartBecomingDormant",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "TickFlush",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "UpdateIrisReplicationViews",
+   "method": "runtime-reflection",
+   "status": "todo"
+  },
+  {
+   "name": "UpdateSafeZonesPhase",
+   "method": "runtime-reflection",
+   "status": "todo"
+  }
+ ]
+}

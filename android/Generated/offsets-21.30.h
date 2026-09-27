@@ -123,4 +123,54 @@ inline constexpr uint64_t kStr_AllowCommandletRendering = 0xe675b8; // "AllowCom
 inline constexpr uint64_t kStr_AllowCommandletAudio = 0xd79da8; // "AllowCommandletAudio"
 inline constexpr uint64_t kStr_Artemis_Terrain = 0xddc22e; // "Artemis_Terrain"
 inline constexpr uint64_t kStr_Commandlet = 0xbbc4b4; // "Commandlet"
+// ── function bake (find82)
+// resolved by scripts/find82 — see functions-21.30.json for provenance
+
+inline constexpr uint64_t kFn_ActivatePhase = 0x4863308; // resolved
+inline constexpr uint64_t kFn_ActorChannelClose = 0x92f8d64; // resolved
+inline constexpr uint64_t kFn_ApplyCharacterCustomization = 0x66e6388; // resolved
+inline constexpr uint64_t kFn_CanAffordToPlaceBuildableClass = 0x665ab4c; // resolved
+inline constexpr uint64_t kFn_CreateChannel = 0x9519af0; // resolved
+inline constexpr uint64_t kFn_EnterAircraft = 0x5a8227c; // resolved
+inline constexpr uint64_t kFn_FindNamedNetDriver = 0x98bb050; // resolved
+inline constexpr uint64_t kFn_FinishWorldInitialization = 0x551ba34; // resolved
+inline constexpr uint64_t kFn_GameSessionPatch = 0x5553e04; // resolved
+inline constexpr uint64_t kFn_GetMaxTickRate = 0x98bb160; // resolved
+inline constexpr uint64_t kFn_GetNetMode = 0x992f0e0; // resolved
+inline constexpr uint64_t kFn_GetPlayerViewPoint = 0x55cb164; // resolved
+inline constexpr uint64_t kFn_GiveAbility = 0x3176468; // resolved
+inline constexpr uint64_t kFn_GiveAbilityAndActivateOnce = 0x3176468; // ambiguous
+inline constexpr uint64_t kFn_HandleMatchHasStarted = 0x552ab84; // resolved
+inline constexpr uint64_t kFn_HandlePostSafeZonePhaseChanged = 0x5504ac4; // resolved
+inline constexpr uint64_t kFn_InitBase = 0x3851c5c; // resolved
+inline constexpr uint64_t kFn_InitConnect = 0x38525a4; // resolved
+inline constexpr uint64_t kFn_InitListen = 0x3852a0c; // resolved
+inline constexpr uint64_t kFn_InitializeBuildingActor = 0x591c5e4; // resolved
+inline constexpr uint64_t kFn_InitializePlayerGameplayAbilities = 0x5e81e10; // resolved
+inline constexpr uint64_t kFn_InternalTryActivateAbility = 0x317a94c; // resolved
+inline constexpr uint64_t kFn_IsNetRelevantFor = 0x90784d8; // resolved
+inline constexpr uint64_t kFn_KickPlayer = 0x62b0c38; // resolved
+inline constexpr uint64_t kFn_ListenCall = 0x98c4e34; // resolved
+inline constexpr uint64_t kFn_LoadMap = 0x98c8bc0; // resolved
+inline constexpr uint64_t kFn_NotifyGameMemberAdded = 0x556bb34; // resolved
+inline constexpr uint64_t kFn_OnRep_ZiplineState = 0x65d22d0; // resolved
+inline constexpr uint64_t kFn_PayBuildableClassPlacementCost = 0x665ad20; // resolved
+inline constexpr uint64_t kFn_PickTeam = 0x550d590; // resolved
+inline constexpr uint64_t kFn_QueueStatEvent = 0x674a5bc; // resolved
+inline constexpr uint64_t kFn_ReplaceBuildingActor = 0x5932630; // resolved
+inline constexpr uint64_t kFn_ReplicateActor = 0x92fbd9c; // resolved
+inline constexpr uint64_t kFn_SelectAndSetupMyBuildingLevel = 0x5899b90; // resolved
+inline constexpr uint64_t kFn_SendClientAdjustment = 0x921e620; // resolved
+inline constexpr uint64_t kFn_SendRequestNow = 0x36aad64; // resolved
+inline constexpr uint64_t kFn_SetChannelActorForDestroy = 0x930cffc; // resolved
+inline constexpr uint64_t kFn_SetState = 0x618c658; // resolved
+inline constexpr uint64_t kFn_ShouldAllowServerSpawnDeco = 0x6a8463c; // resolved
+inline constexpr uint64_t kFn_SpawnDeco = 0x6a91214; // resolved
+inline constexpr uint64_t kFn_SpawnInitialSafeZone = 0x5505948; // resolved
+inline constexpr uint64_t kFn_StartAircraftPhase = 0x5509de8; // resolved
+inline constexpr uint64_t kFn_StartStreamingAdditionalPlaylistLevel = 0x5e48430; // resolved
+inline constexpr uint64_t kFn_StreamInMyBuilding = 0x587ae00; // ambiguous
+inline constexpr uint64_t kFn_UWorld_Listen = 0x992bc7c; // resolved
+inline constexpr uint64_t kFn_UnEquipVehicleWeapon = 0x6a1e5dc; // resolved
+
 } // namespace Erbium::Baked

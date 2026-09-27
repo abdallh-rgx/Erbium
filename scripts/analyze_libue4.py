@@ -482,6 +482,38 @@ def analyze(so_name, blob, version, out_path):
             f.write(f"inline constexpr uint64_t kSym_{ident(name)} = {hex(addr)}; // {name}\n")
         for text_anchor, addr in anchors.items():
             f.write(f"inline constexpr uint64_t kStr_{ident(text_anchor)} = {hex(addr)}; // \"{text_anchor}\"\n")
+
+        # ── function bake (find82): merge + verify ────────────────────
+        # If scripts/find82 produced functions-<ver>.json for this version,
+        # re-emit the kFn_ constants from it (keeps the CI-generated header
+        # identical to the committed one) and VERIFY every resolved address
+        # lands inside .text of THIS binary (guards against version drift).
+        bake_id = re.sub(r"^(\d+\.\d+).*", r"\1", version)
+        fnjson = os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                              f"functions-{bake_id}.json")
+        if os.path.isfile(fnjson):
+            fand = json.load(open(fnjson))
+            n_ok = n_bad = 0
+            f.write("// ── function bake (find82)\n")
+            f.write("// resolved by scripts/find82 — see functions-%s.json for provenance\n\n" % bake_id)
+            for entry in sorted(fand.get("functions", []), key=lambda e: e["name"]):
+                if entry.get("status") == "todo":
+                    continue
+                addr = int(entry["addr"], 16)
+                if TEXT_LO <= addr < TEXT_HI:
+                    f.write(f"inline constexpr uint64_t kFn_{entry['name']} = {hex(addr)}; // {entry['status']}\n")
+                    n_ok += 1
+                else:
+                    print(f"[analyze] FUNCTION-BAKE MISMATCH: {entry['name']} "
+                          f"{entry['addr']} outside .text of this binary!")
+                    n_bad += 1
+            f.write("\n")
+            print(f"[analyze] function bake: {n_ok} verified in .text, {n_bad} MISMATCHED")
+            if n_bad:
+                raise RuntimeError(f"function bake verification failed ({n_bad} mismatched)")
+        else:
+            print(f"[analyze] no function bake found at {fnjson} (find82 not run for this version)")
+
         f.write("} // namespace Erbium::Baked\n")
     print(f"[analyze] wrote {out_path}")
 
