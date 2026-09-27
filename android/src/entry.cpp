@@ -21,6 +21,7 @@
 #include "platform.h"
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
 #include <jni.h>
