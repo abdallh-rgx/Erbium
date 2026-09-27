@@ -106,12 +106,17 @@ adb_root_try() {
     ADB_ROOTED=1; return 0
   fi
   adb_dev root >/dev/null 2>&1
-  sleep 2
-  if [ "$(adb_dev shell id 2>/dev/null | tr -d '\r')" = "uid=0(root)" ]; then
-    ADB_ROOTED=1; ok "adb root enabled"
-  else
-    ADB_ROOTED=0; warn "adb root unavailable (playstore image / user build) — multitouch falls back to emulator console"
-  fi
+  # `adb root` RESTARTS adbd → the device flaps offline for a few seconds.
+  # Poll up to 30s for adbd to come back as root before concluding anything.
+  local t0=$(_now_s)
+  while [ $(( $(_now_s) - t0 )) -lt 30 ]; do
+    sleep 2
+    adb_dev wait-for-device >/dev/null 2>&1 || true
+    if [ "$(adb_dev shell id 2>/dev/null | tr -d '\r')" = "uid=0(root)" ]; then
+      ADB_ROOTED=1; ok "adb root enabled"; return 0
+    fi
+  done
+  ADB_ROOTED=0; warn "adb root unavailable (playstore image / user build) — multitouch falls back to emulator console"
 }
 
 screen_size() {  # → "W H"
@@ -237,7 +242,20 @@ wait_activity() {  # "ActivityName" [timeout_s] — any activity containing name
   done
 }
 
-is_installed() { shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$GAME_PKG$"; }
+is_installed() {
+  # NOTE: right after an `adb root` adbd restart the shell can answer
+  # "error: device offline" — retry until pm answers authoritatively.
+  local t0=$(_now_s) out=""
+  while [ $(( $(_now_s) - t0 )) -lt 30 ]; do
+    out=$(shell_dev pm list packages 2>/dev/null | tr -d '\r')
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | grep -q "package:$GAME_PKG$" && return 0
+      return 1  # pm answered — the package really isn't there
+    fi
+    sleep 2  # device reconnecting — try again
+  done
+  return 1
+}
 
 install_apk() {  # <apk>
   local apk=$1
