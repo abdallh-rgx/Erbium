@@ -28,6 +28,10 @@ on:
         description: 'Version label (e.g. 21.30.0-21088273)'
         required: false
         default: '21.30.0-21088273'
+      image_flavor:
+        description: 'System image flavor: google_apis_playstore (no adb root) or google_apis (adb root → automated 4-finger console)'
+        required: false
+        default: 'google_apis_playstore'
       keep_alive:
         description: 'Minutes to keep runner alive after test (0 = off)'
         required: false
@@ -42,9 +46,10 @@ jobs:
     # ndk_translation, so arm64-v8a apps (Fortnite + liberbium) run translated.
     # Current emulators refuse arm64 system images on x86_64 hosts outright.
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     env:
       API_LEVEL: '30' # Android 11 — x86_64 image w/ ndk_translation (runs arm64 apps)
+      IMAGE_FLAVOR: google_apis_playstore
       ABI: arm64-v8a
       NDK_VER: '27.2.12479018'
       # pin the AVD home for BOTH avdmanager and emulator — newer cmdline-tools
@@ -80,7 +85,7 @@ jobs:
         run: |
           set -e
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openjdk-17-jdk-headless unzip wget curl python3-pip adb udev
+          sudo apt-get install -y -qq openjdk-17-jdk-headless unzip wget curl python3-pip adb udev python3-pil
 
       # ── Android SDK + emulator (ARM64 system image, no KVM → QEMU TCG) ───
       - name: Install Android SDK + emulator + NDK + system image
@@ -92,9 +97,14 @@ jobs:
           unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          FLAVOR="${{ github.event.inputs.image_flavor }}"
+          # google_apis (non-playstore) allows `adb root` → sendevent-based
+          # 4-finger console automation. playstore blocks root; the gameflow
+          # test then falls back to emulator-console touch injection.
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "emulator" "ndk;${NDK_VER}" \
-            "system-images;android-30;google_apis_playstore;x86_64" > /dev/null
+            "system-images;android-30;${FLAVOR};x86_64" > /dev/null
+          echo "IMAGE_FLAVOR=$FLAVOR" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
@@ -112,9 +122,9 @@ jobs:
           avd.ini.encoding=UTF-8
           Abi.type=x86_64
           AvdId=erbium
-          Tag=google_apis_playstore
-          Tag.display=Google Play
-          image.sysdir.1=system-images/android-30/google_apis_playstore/x86_64/
+          Tag=${IMAGE_FLAVOR}
+          Tag.display=${IMAGE_FLAVOR}
+          image.sysdir.1=system-images/android-30/${IMAGE_FLAVOR}/x86_64/
           hw.device.name=pixel_4
           hw.device.manufacturer=Google
           hw.cpu.arch=x86_64
@@ -266,47 +276,31 @@ jobs:
           curl -s http://127.0.0.1:3551/ | head -1
           echo "backend up"
 
-      - name: Install & launch
+      - name: Install APK
         run: |
           set -e
-          adb install -r artifacts/fortnite-patched.apk
-          # Clear old logcat, then launch and stream
-          adb logcat -c
-          adb shell monkey -p com.epicgames.fortnite -c android.intent.category.LAUNCHER 1 || true
+          adb install -r -t artifacts/fortnite-patched.apk
 
-      - name: Watch logcat for Erbium + crashes (15 min)
+      # ── FULL GAME FLOW: launch → internal update → Voltronite login →
+      #    GO → map load → in-match screenshot + player verification ─────
+      - name: Game-flow test (update → login → match → verify)
+        env:
+          VOLTRONITE_LOG: /tmp/voltronite.log
         run: |
-          set -e
-          adb logcat -d > artifacts/logcat-full.txt || true
-          # Stream for up to 15 minutes, stopping early on native crash
-          END=$((SECONDS+900))
-          while [ $SECONDS -lt $END ]; do
-            adb logcat -d >> artifacts/logcat-full.txt || true
-            if adb shell ls /data/tombstones 2>/dev/null | grep -q tombstone; then
-              echo "TOMBSTONE DETECTED"
-              adb shell su 0 ls /data/tombstones 2>/dev/null || true
-              break
-            fi
-            if grep -q "FATAL EXCEPTION\|SIGSEGV\|liberbium.*crash" artifacts/logcat-full.txt; then
-              echo "CRASH DETECTED — see artifacts"
-              break
-            fi
-            if grep -q "POST-FLIP" artifacts/logcat-full.txt; then
-              echo ">>> ERBIUM FLAG FLIP HAPPENED <<<"
-            fi
-            if grep -q "dispatching console command" artifacts/logcat-full.txt; then
-              echo ">>> ERBIUM OPEN COMMAND DISPATCHED <<<"
-            fi
-            sleep 15
-          done
-          grep -E "Erbium|SIGSEGV|FATAL|tombstone|DEBUG|LogNet|LogWorld" artifacts/logcat-full.txt | tail -200 > artifacts/logcat-erbium.txt || true
-          # key milestone lines for the job summary
-          {
-            echo "## Erbium bring-up log digest"
-            echo '```'
-            grep -E "Erbium|POST-FLIP|dispatching|LogNet.*Listen|LogWorld.*Artemis" artifacts/logcat-full.txt | tail -50 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/android/gameflow_test.sh \
+            --skip-install \
+            --backend http://10.0.2.2:3551 \
+            --user ErbiumCI || TEST_RC=$?
+          # the driver never exits non-zero on its own — but guard anyway
+          echo "gameflow exit: ${TEST_RC:-0}"
+          cat artifacts/VERDICT.txt 2>/dev/null || true
+          # surface the verdict in the job log + fail the step on FAIL
+          if [ -f artifacts/VERDICT.txt ] && grep -q "OVERALL: PASS" artifacts/VERDICT.txt; then
+            echo ">>> GAME FLOW: PASS <<<"
+          else
+            echo ">>> GAME FLOW: FAIL — inspect artifacts <<<"
+            exit 1
+          fi
 
       - name: Keep-alive (optional, for live SSH debugging)
         if: ${{ github.event.inputs.keep_alive != '0' }}
