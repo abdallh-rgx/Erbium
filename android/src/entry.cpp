@@ -6,8 +6,10 @@
 // then:
 //   1. waits for libUnreal.so (or libUE4.so) to be mapped,
 //   2. waits for the engine singleton (GEngine) to exist,
-//   3. flips GIsClient=false / GIsServer=true  (the Erbium core trick),
-//   4. invokes the game's own exported nativeConsoleCommand() with
+//   3. waits for the GO file (/data/local/tmp/erbium.go) — the login + lobby
+//      must be up BEFORE the flip, or the pawn never spawns,
+//   4. flips GIsClient=false / GIsServer=true  (the Erbium core trick),
+//   5. invokes the game's own exported nativeConsoleCommand() with
 //      "open Artemis_Terrain" — no pattern-scanning, no UObject SDK needed
 //      for the v1 map-hosting bring-up.
 //
@@ -33,10 +35,32 @@ namespace Erbium
 
     static JavaVM* g_vm = nullptr;
 
-    // Backend (Voltronite) URL for the Owen.c redirect. On an emulator the
-    // host loopback is 10.0.2.2 — the CI runs the backend on the runner.
+    // Backend (Voltronite) URL for the Owen.c redirect — RUNTIME-CONFIGURABLE:
+    // create /data/local/tmp/erbium.backend containing the URL the DEVICE
+    // should use (e.g. http://10.0.2.2:3551 on an emulator whose backend runs
+    // on the host, http://127.0.0.1:3551 with Termux on-device). No file =
+    // compiled-in default. One patched APK works everywhere.
     static const char* BackendUrl()
     {
+        static char cached[4096] = {0};
+        static bool resolved = false;
+        if (!resolved)
+        {
+            resolved = true;
+            if (FILE* f = fopen("/data/local/tmp/erbium.backend", "rb"))
+            {
+                size_t n = fread(cached, 1, sizeof(cached) - 1, f);
+                fclose(f);
+                while (n > 0 && (cached[n-1] == '\n' || cached[n-1] == '\r' || cached[n-1] == ' '))
+                    cached[--n] = 0;
+                if (strncmp(cached, "http", 4) == 0)
+                    LOGI("backend URL from /data/local/tmp/erbium.backend: %s", cached);
+                else
+                    cached[0] = 0; // garbage — fall back
+            }
+        }
+        if (cached[0])
+            return cached;
 #ifdef ERBIUM_EMULATOR
         return "http://10.0.2.2:3551";
 #else
@@ -79,11 +103,60 @@ namespace Erbium
     }
 
     // Extra settling delay after GEngine appears before we flip flags / open
-    // the map. The frontend world needs a few seconds to come up. Bumped or
-    // rebuilt per CI run when needed — frontend login flow lands in phase-3.
+    // the map. The frontend world needs a few seconds to come up.
     static int SettleDelaySeconds()
     {
-        return 25;
+        return 3;
+    }
+
+    // ── GO-file gate ─────────────────────────────────────────────────────
+    // The flip + map open must NOT happen before the player is logged in and
+    // the frontend/lobby is up — otherwise the map travels with no player
+    // profile loaded and the pawn never spawns ("player doesn't exist / under
+    // the map"). The automation (scripts/android/gameflow_test.sh) drives the
+    // login flow first and then creates this file:
+    //
+    //     adb shell touch /data/local/tmp/erbium.go
+    //
+    // If the file already exists when the engine comes up, we GO immediately
+    // (pure-server / CI-milestone mode). Otherwise we wait — logging a
+    // heartbeat — until it appears (real-device flow: log in, reach the lobby,
+    // then touch the file, or use the 4-finger console + open by hand).
+    static const char* kGoFilePath = "/data/local/tmp/erbium.go";
+
+    static bool GoFileExists()
+    {
+        FILE* f = fopen(kGoFilePath, "rb");
+        if (f)
+        {
+            fclose(f);
+            return true;
+        }
+        return false;
+    }
+
+    static bool WaitForGoFile()
+    {
+        if (GoFileExists())
+        {
+            LOGI("GO file already present — immediate flip+open mode");
+            return true;
+        }
+        LOGI("waiting for GO file: %s", kGoFilePath);
+        LOGI("(log in, reach the lobby, then: adb shell touch %s)", kGoFilePath);
+        const auto started = std::chrono::steady_clock::now();
+        for (;;)
+        {
+            for (int i = 0; i < 15; ++i) // 2s poll
+            {
+                if (GoFileExists())
+                    return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(133));
+            }
+            const auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - started).count();
+            LOGI("still waiting for GO file (%llds) — flip+open deferred", (long long)secs);
+        }
     }
 
     // Invoke the game's exported JNI console-command entry directly.
@@ -204,10 +277,12 @@ namespace Erbium
             return;
         }
 
-        // 3) Let the frontend settle, then flip the client/server flags.
-        //    .bss is writable — no mprotect dance needed for data flips.
+        // 3) Wait for the GO signal (login + lobby first!), then flip the
+        //    client/server flags. .bss is writable — no mprotect dance needed.
+        if (!WaitForGoFile())
+            return; // unreachable (waits forever) — keeps logic explicit
         const int delay = SettleDelaySeconds();
-        LOGI("engine up — settling %ds before flag flip...", delay);
+        LOGI("GO received — settling %ds before flag flip...", delay);
         std::this_thread::sleep_for(std::chrono::seconds(delay));
 
         volatile bool* isClient = (volatile bool*)(engineBase + Baked::kGIsClient);

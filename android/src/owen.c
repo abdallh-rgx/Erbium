@@ -1033,6 +1033,7 @@ static int InternalProcessRequest(void* Req, int isEOS) {
     if (ShouldRedirect(url.host)) {
         char newUrlCStr[URL_TOTAL_MAX];
         CreateUrl(g_backend_url, url.pathAndQuery, newUrlCStr, sizeof(newUrlCStr));
+        LOGOW("redirect: %s -> %s", OGUrlCStr, newUrlCStr);
         struct FString* newUrl = (struct FString*)malloc(sizeof(struct FString));
         *newUrl = FString_FromCStr(newUrlCStr);
         SetUrl(Req, newUrl);
@@ -1054,6 +1055,7 @@ static int CurlHook_SetOptHook(void* handle, int option, void* args) {
             if (ShouldRedirect(parsed.host)) {
                 static __thread char newUrl[URL_TOTAL_MAX];
                 CreateUrl(g_backend_url, parsed.pathAndQuery, newUrl, sizeof(newUrl));
+                LOGOW("redirect(curl): %s -> %s", url, newUrl);
                 return CurlHook_OG_SETOPT(handle, option, (void*)newUrl);
             }
         }
