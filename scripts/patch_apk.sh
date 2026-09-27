@@ -113,6 +113,84 @@ open(path, 'w', encoding='utf-8').write(src)
 print("injected loadLibrary into onCreate")
 PY
 
+# ── inject the 4-finger debug console into GameActivity ──────────────────
+# The console is opened by pressing the screen with 4 fingers at once:
+# GameActivity.dispatchTouchEvent sees pointerCount==4 and calls
+# forceShowConsoleWindow_test() → AndroidThunkJava_ShowConsoleWindow (the
+# console window Epic ships in the real game for support debugging).
+#
+# Same mechanism owenlauncher uses — smali is the user's proven code, with the
+# invoke-super class rewritten to whatever GameActivity's actual .super is.
+python3 - "$WORK" <<'PY'
+import sys, glob, os, re
+
+work = sys.argv[1]
+candidates = glob.glob(os.path.join(work, 'decoded', 'smali*', 'com', 'epicgames', 'unreal', 'GameActivity.smali'))
+if not candidates:
+    print("WARN: GameActivity.smali not found — console injection skipped")
+    sys.exit(0)
+path = candidates[0]
+src = open(path, encoding='utf-8').read()
+
+if 'forceShowConsoleWindow_test' in src:
+    print("console injection: already present")
+    sys.exit(0)
+
+# The native console-window entry must exist on this build (Epic ships it in
+# the real game; owenlauncher relies on the same call).
+if 'AndroidThunkJava_ShowConsoleWindow' not in src:
+    print("WARN: AndroidThunkJava_ShowConsoleWindow not declared in GameActivity — "
+          "console injection skipped (this build may predate it)")
+    sys.exit(0)
+
+m = re.search(r'^\.super\s+(\S+)', src, re.M)
+superclass = m.group(1) if m else 'Landroid/app/NativeActivity;'
+print(f"GameActivity superclass: {superclass}")
+
+# Replace any pre-existing dispatchTouchEvent override with ours (a duplicate
+# method definition would break the smali build).
+src = re.sub(
+    r'\.method\s+public\s+dispatchTouchEvent\(Landroid/view/MotionEvent;\)Z\s*\n'
+    r'(?:.*?\n)*?\.end method\n',
+    '', src, count=1)
+
+CONSOLE_SMALI = f""".method public dispatchTouchEvent(Landroid/view/MotionEvent;)Z
+    .registers 4
+
+    # p0 = GameActivity (this)
+    # p1 = MotionEvent
+
+    if-eqz p1, :cond_pass
+
+    invoke-virtual {{p1}}, Landroid/view/MotionEvent;->getPointerCount()I
+    move-result v0
+
+    const/4 v1, 0x4
+    if-ne v0, v1, :cond_pass
+
+    invoke-virtual {{p0}}, Lcom/epicgames/unreal/GameActivity;->forceShowConsoleWindow_test()V
+
+    :cond_pass
+    invoke-super {{p0, p1}}, {superclass}->dispatchTouchEvent(Landroid/view/MotionEvent;)Z
+    move-result v0
+
+    return v0
+.end method
+
+.method public forceShowConsoleWindow_test()V
+    .registers 2
+
+    const-string v0, "ASTC,ETC2"
+    invoke-virtual {{p0, v0}}, Lcom/epicgames/unreal/GameActivity;->AndroidThunkJava_ShowConsoleWindow(Ljava/lang/String;)V
+
+    return-void
+.end method
+"""
+
+open(path, 'w', encoding='utf-8').write(src.rstrip('\n') + '\n\n' + CONSOLE_SMALI)
+print("console injection: dispatchTouchEvent (4-finger) + forceShowConsoleWindow_test added")
+PY
+
 # ── drop our native lib next to the game's ────────────────────────────────
 if [ -f "$LIBERBIUM" ]; then
   mkdir -p decoded/lib/arm64-v8a
