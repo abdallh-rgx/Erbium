@@ -102,6 +102,11 @@ if is_emulator; then
 fi
 log "backend URL (device view): $BACKEND_URL"
 
+# best-effort runtime permissions (harmless if absent on this Android version)
+for perm in android.permission.WRITE_EXTERNAL_STORAGE android.permission.READ_EXTERNAL_STORAGE; do
+  shell_dev pm grant "$GAME_PKG" "$perm" >/dev/null 2>&1 || true
+done
+
 # fresh run: clear the GO gate + set the backend the game should redirect to
 go_signal_clear
 set_backend_url "$BACKEND_URL"
@@ -165,6 +170,9 @@ while [ $(( $(_now_s) - t0 )) -lt "$T_UPDATE" ]; do
     log "backend traffic: $c redirected requests"
   fi
   if [ $(( $(_now_s) - last_change )) -ge "$UPDATE_IDLE_S" ]; then
+    # confirm with the screen: an update in progress churns (progress bars);
+    # soft-settle so an animated lobby can't hang us forever
+    wait_screen_stable 180 3 5 12 || warn "screen still churning after traffic went quiet — counting the update as done anyway"
     UPD_OK=1
     ok "backend traffic quiet for ${UPDATE_IDLE_S}s ($c requests total) — internal update done"
     break
