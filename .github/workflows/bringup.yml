@@ -29,9 +29,9 @@ on:
         required: false
         default: '21.30.0-21088273'
       image_flavor:
-        description: 'System image flavor: google_apis_playstore (no adb root) or google_apis (adb root → automated 4-finger console)'
+        description: 'System image flavor: google_apis (adb root + ndk_translation) or default (deprecated playstore image was removed from the SDK repo)'
         required: false
-        default: 'google_apis_playstore'
+        default: 'google_apis'
       keep_alive:
         description: 'Minutes to keep runner alive after test (0 = off)'
         required: false
@@ -42,14 +42,16 @@ permissions:
 
 jobs:
   emulator:
-    # x86_64 host + API-30 google_apis_playstore x86_64 image: the image ships
-    # ndk_translation, so arm64-v8a apps (Fortnite + liberbium) run translated.
-    # Current emulators refuse arm64 system images on x86_64 hosts outright.
+    # x86_64 host + API-30 google_apis x86_64 image (r16+): ships ndk_translation
+    # (abilist includes arm64-v8a, fingerprint generic_x86_64_arm64), so arm64-v8a
+    # apps (Fortnite + liberbium) run translated. The playstore image was removed
+    # from the SDK repository (2026); google_apis r16 replaced it AND allows
+    # `adb root` → real sendevent 4-finger console automation.
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
       API_LEVEL: '30' # Android 11 — x86_64 image w/ ndk_translation (runs arm64 apps)
-      IMAGE_FLAVOR: google_apis_playstore
+      IMAGE_FLAVOR: google_apis
       ABI: arm64-v8a
       NDK_VER: '27.2.12479018'
       # pin the AVD home for BOTH avdmanager and emulator — newer cmdline-tools
@@ -99,8 +101,10 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           FLAVOR="${{ github.event.inputs.image_flavor }}"
           # google_apis (non-playstore) allows `adb root` → sendevent-based
-          # 4-finger console automation. playstore blocks root; the gameflow
-          # test then falls back to emulator-console touch injection.
+          # 4-finger console automation. (playstore flavor no longer exists in
+          # the SDK repo — kept only as an override for pinned local images;
+          # without root the gameflow test falls back to emulator-console
+          # touch injection.)
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "emulator" "ndk;${NDK_VER}" \
             "system-images;android-30;${FLAVOR};x86_64" > /dev/null
