@@ -1,5 +1,9 @@
 #pragma once
+#ifndef __ANDROID__
 #include "Memcury.h"
+#else
+// Android: Memcury comes from android/erbium/Memcury.h via SDK/Includes.h
+#endif
 #include <array>
 
 namespace SDK
@@ -51,6 +55,9 @@ namespace SDK
     extern void UpdateNumElemsPerChunk();
     extern void InitializeProcessEventVft(uintptr_t);
 
+    void Init(); // Android: defined in android/erbium/SDKBootstrap.cpp
+
+#ifndef __ANDROID__
     inline void Init()
     {
         FStringNoOps OutVar;
@@ -475,4 +482,5 @@ namespace SDK
 
         InitializeProcessEventVft(addr);
     }
+#endif // __ANDROID__
 } // namespace SDK

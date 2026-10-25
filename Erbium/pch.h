@@ -8,13 +8,40 @@
 #define PCH_H
 
 // add headers that you want to pre-compile here
+#ifdef __ANDROID__
+#include "../../android/erbium/compat/win32_compat.h"
+#else
 #include "framework.h"
+#endif
 #include "../SDK/Includes.h"
 using namespace SDK;
 #include "Erbium/Public/Utils.h"
 #include <numeric>
 #include <algorithm>
+#ifndef __ANDROID__
 #include "libcurl/curl.h"
+#else
+// Android port: libcurl disabled (webhook status only) — no-op stubs.
+extern "C" {
+typedef void CURL;
+typedef void curl_slist;
+typedef int CURLcode;
+enum { CURLE_OK = 0 };
+enum {
+    CURLOPT_URL = 1, CURLOPT_HTTPHEADER = 2, CURLOPT_POSTFIELDS = 3,
+    CURLOPT_WRITEDATA = 4, CURLOPT_WRITEFUNCTION = 5, CURLOPT_FOLLOWLOCATION = 6,
+    CURLOPT_VERBOSE = 7
+};
+inline CURL* curl_easy_init() { return nullptr; }
+inline CURLcode curl_easy_setopt(CURL*, int, ...) { return 0; }
+inline CURLcode curl_easy_perform(CURL*) { return 0; }
+inline void curl_easy_cleanup(CURL*) {}
+inline curl_slist* curl_slist_append(curl_slist* l, const char*) { return l; }
+inline void curl_slist_free_all(curl_slist*) {}
+inline const char* curl_easy_strerror(CURLcode) { return "curl-disabled"; }
+inline CURLcode curl_global_init(long) { return 0; }
+}
+#endif
 
 inline UEAllocatedString iso8601()
 {

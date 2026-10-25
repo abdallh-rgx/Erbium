@@ -1,0 +1,83 @@
+name: android-full-server
+
+# Build the FULL Erbium server (liberbium.so) for every baked version.
+# Each artifact = one Fortnite Android version; runtime chains inside the
+# library cover any OTHER 5.x→30.00 build as well.
+
+on:
+  push:
+    branches: [android-port, android, main]
+    paths:
+      - 'android/**'
+      - 'SDK/**'
+      - 'Erbium/**'
+      - '.github/workflows/android-full-server.yml'
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Comma-separated versions (empty = all 11)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["5.41", "7.40", "9.41", "13.40", "17.50", "18.40", "19.10", "21.30", "22.40", "23.50", "30.00"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ninja + cmake
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build cmake
+
+      - name: Install Android cmdline-tools + NDK
+        run: |
+          set -e
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" > /dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "NDK_VERSION=27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Configure (arm64-v8a, FN ${{ matrix.version }})
+        run: |
+          cmake -B build -S android -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/$NDK_VERSION/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DERBIUM_TARGET_VERSION=${{ matrix.version }}
+
+      - name: Build liberbium.so (FULL server)
+        run: cmake --build build --parallel 3
+
+      - name: Sanity checks
+        run: |
+          set -e
+          ls -la build/liberbium.so
+          file build/liberbium.so | grep -q 'ARM aarch64' || { echo "NOT arm64!"; exit 1; }
+          readelf -d build/liberbium.so | grep -E 'NEEDED|SONAME'
+
+      - name: Verify the SDK bootstrap symbols are present
+        run: |
+          # the full-server entry points must exist in the binary
+          nm -D build/liberbium.so | grep -q ErbiumAndroidMain || { echo "missing ErbiumAndroidMain"; exit 1; }
+          nm build/liberbium.so | grep -q "SDK.*Init" || { echo "missing SDK::Init"; exit 1; }
+          echo "full-server symbols OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liberbium-${{ matrix.version }}
+          path: build/liberbium.so
+          if-no-files-found: error
+          retention-days: 90

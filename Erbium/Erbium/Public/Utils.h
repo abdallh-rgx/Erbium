@@ -241,8 +241,8 @@ public:
 inline std::vector<void (*)()> _HookFuncs;
 inline std::vector<void (*)()> _PostLoadHookFuncs;
 #define DefHookOg(_Rt, _Name, ...)                                                                                                                                                                                    \
-    static inline _Rt (*_Name##OG)(##__VA_ARGS__);                                                                                                                                                                    \
-    static _Rt _Name(##__VA_ARGS__);
+    static inline _Rt (*_Name##OG)(__VA_ARGS__);                                                                                                                                                                    \
+    static _Rt _Name(__VA_ARGS__);
 #define DefUHookOg(_Name)                                                                                                                                                                                             \
     static inline void (*_Name##OG)(UObject*, FFrame&);                                                                                                                                                               \
     static void _Name(UObject*, FFrame&);
@@ -270,18 +270,43 @@ inline std::vector<void (*)()> _PostLoadHookFuncs;
     };                                                                                                                                                                                                                \
     static inline auto _PostLoadHookAdder = _AddPostLoadHook();
 #endif
+#ifdef __ANDROID__
+// Android: ExecFunction is an MSVC-property (void*) — route fn-ptrs through a
+// byte-copy (clang forbids direct fn-ptr↔void* casts).
+#define ERBIUM_FN2VOID(_f)                                                                                                                                                                                            \
+    ([&]() { void* _v = nullptr;                                                                                                                                                                                      \
+             const void* _src = reinterpret_cast<const void*>(&_f);                                                                                                                                                   \
+             memcpy(&_v, _src, sizeof(_v));                                                                                                                                                                           \
+             return _v; })()
+#define callOG(_Tr, _Fn, _Th, ...)                                                                                                                                                                                    \
+    ([&]()                                                                                                                                                                                                            \
+    {                                                                                                                                                                                                                 \
+        _Fn->ExecFunction = ERBIUM_FN2VOID(_Th##_OG);                                                                                                                                                                 \
+        _Tr->_Th(__VA_ARGS__);                                                                                                                                                                                      \
+        _Fn->ExecFunction = ERBIUM_FN2VOID(_Th##_);                                                                                                                                                                   \
+    })()
+#define callOGWithRet(_Tr, _Fn, _Th, ...)                                                                                                                                                                             \
+    ([&]()                                                                                                                                                                                                            \
+    {                                                                                                                                                                                                                 \
+        _Fn->ExecFunction = ERBIUM_FN2VOID(_Th##_OG);                                                                                                                                                                 \
+        auto _Rt = _Tr->_Th(__VA_ARGS__);                                                                                                                                                                           \
+        _Fn->ExecFunction = ERBIUM_FN2VOID(_Th##_);                                                                                                                                                                   \
+        return _Rt;                                                                                                                                                                                                   \
+    })()
+#else
 #define callOG(_Tr, _Fn, _Th, ...)                                                                                                                                                                                    \
     ([&]()                                                                                                                                                                                                            \
     {                                                                                                                                                                                                                 \
         _Fn->ExecFunction = _Th##_OG;                                                                                                                                                                                 \
-        _Tr->_Th(##__VA_ARGS__);                                                                                                                                                                                      \
+        _Tr->_Th(__VA_ARGS__);                                                                                                                                                                                      \
         _Fn->ExecFunction = _Th##_;                                                                                                                                                                                   \
     })()
 #define callOGWithRet(_Tr, _Fn, _Th, ...)                                                                                                                                                                             \
     ([&]()                                                                                                                                                                                                            \
     {                                                                                                                                                                                                                 \
         _Fn->ExecFunction = _Th##_OG;                                                                                                                                                                                 \
-        auto _Rt = _Tr->_Th(##__VA_ARGS__);                                                                                                                                                                           \
+        auto _Rt = _Tr->_Th(__VA_ARGS__);                                                                                                                                                                           \
         _Fn->ExecFunction = _Th##_;                                                                                                                                                                                   \
         return _Rt;                                                                                                                                                                                                   \
     })()
+#endif

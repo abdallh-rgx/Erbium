@@ -17,8 +17,17 @@ struct FConfiguration
     static inline auto bKeepInventory = false;
     static inline auto Port = 7777;
     static inline auto bEnableIris = true;
+#ifdef __ANDROID__
+    // Android: no ImGui/DX11 console, no SEH crash reporter (logcat tombstones),
+    // no libcurl in the v1 port (webhook disabled).
+    static inline constexpr auto bGUI = false;
+    static inline constexpr auto bCustomCrashReporter = false;
+    static inline constexpr auto bUseStdoutLog = false;
+    static inline constexpr auto WebhookURL = "";
+#else
     static inline constexpr auto bGUI = true;
     static inline constexpr auto bCustomCrashReporter = true;
     static inline constexpr auto bUseStdoutLog = false;
     static inline constexpr auto WebhookURL = ""; // fill in if you want status to send to a webhook
+#endif
 };

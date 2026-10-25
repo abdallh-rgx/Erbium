@@ -9,6 +9,11 @@
 #include <string_view>
 #include <unordered_map>
 
+#ifdef __ANDROID__
+// Android port: UTF conversion helpers for the UTF-8 FString variant.
+#include "../android/erbium/AndroidStrings.h"
+#endif
+
 template <typename ArrayElementType>
 class TStdArray;
 
@@ -405,11 +410,7 @@ namespace UC
         template <typename SetType>
         class SetElement
         {
-        private:
-            template <typename SetDataType>
-            friend class TSet;
-
-        private:
+        public:
             SetType Value;
             int32 HashNextId;
             int32 HashIndex;
@@ -500,6 +501,10 @@ namespace UC
     public:
         typedef T value_type;
 
+        // libc++ compares allocators in basic_string internals — MSVC didn't.
+        bool operator==(const TMemoryAllocator&) const { return true; }
+        bool operator!=(const TMemoryAllocator&) const { return false; }
+
         T* allocate(size_t Count)
         {
             return FMemory::MallocForType<T>(Count);
@@ -534,10 +539,10 @@ namespace UC
     class TArray
     {
     private:
-        template <typename ArrayElementType>
+        template <typename FriendArrayElementType>
         friend class TAllocatedArray;
 
-        template <typename SparseArrayElementType>
+        template <typename FriendSparseArrayElementType>
         friend class TSparseArray;
 
     protected:
@@ -739,7 +744,7 @@ namespace UC
         ~TArray()
         {
             // if (Data)
-            //	FMemory::FreeForType<ArrayElementType>(Data);
+            //  FMemory::FreeForType<ArrayElementType>(Data);
         }
 
     public:
@@ -800,6 +805,92 @@ namespace UC
         }
     };
 
+#ifdef __ANDROID__
+    // ── ANDROID: UE builds use UTF-8 TCHAR → FString is TArray<char>. ──────
+    // Wide literals (L"...") in the Erbium sources are converted at the API
+    // boundary. Layout matches the engine exactly (char elements).
+    class FString : public TArray<char>
+    {
+    public:
+        friend std::ostream& operator<<(std::ostream& Stream, const UC::FString& Str)
+        {
+            return Stream << Str.ToString();
+        }
+
+    public:
+        using TArray::TArray;
+
+        FString(const wchar_t* Str)
+        {
+            std::string Utf8 = ErbiumAndroid::WideToUtf8(Str);
+            const uint32 Len = static_cast<uint32>(Utf8.size() + 1);
+            Data = FMemory::MallocForType<char>(Len);
+            memcpy(Data, Utf8.c_str(), Len);
+            NumElements = Len;
+            MaxElements = Len;
+        }
+
+        FString(const char* Str)
+        {
+            const uint32 Len = static_cast<uint32>(strlen(Str) + 1);
+            Data = FMemory::MallocForType<char>(Len);
+            memcpy(Data, Str, Len);
+            NumElements = Len;
+            MaxElements = Len;
+        }
+
+        FString(UEAllocatedString Str)
+        {
+            const uint32 Len = static_cast<uint32>(Str.size() + 1);
+            Data = FMemory::MallocForType<char>(Len);
+            memcpy(Data, Str.c_str(), Len);
+            NumElements = Len;
+            MaxElements = Len;
+        }
+
+    public:
+        inline UEAllocatedString ToString() const
+        {
+            if (*this && Data)
+                return UEAllocatedString(Data);
+            return "";
+        }
+
+        inline UEAllocatedString ToStr() const
+        {
+            if (*this && Data)
+                return UEAllocatedString(Data);
+            return "";
+        }
+
+        inline UEAllocatedWString ToWString() const
+        {
+            if (*this && Data)
+                return UEAllocatedWString(ErbiumAndroid::Utf8ToWide(Data).c_str());
+            return UEAllocatedWString(L"");
+        }
+
+    public:
+        inline char* CStr()
+        {
+            return Data;
+        }
+        inline const char* CStr() const
+        {
+            return Data;
+        }
+
+    public:
+        inline bool operator==(const FString& Other) const
+        {
+            return Other ? NumElements == Other.NumElements && strcmp(Data, Other.Data) == 0 : false;
+        }
+        inline bool operator!=(const FString& Other) const
+        {
+            return Other ? NumElements != Other.NumElements || strcmp(Data, Other.Data) != 0 : true;
+        }
+    };
+#else
     class FString : public TArray<wchar_t>
     {
     public:
@@ -878,6 +969,7 @@ namespace UC
             return Other ? NumElements != Other.NumElements || wcscmp(Data, Other.Data) != 0 : true;
         }
     };
+#endif // __ANDROID__
 
     /*
      * Class to allow construction of a TArray, that uses c-style standard-library memory allocation.
@@ -1359,6 +1451,20 @@ namespace UC
 
                 FindFirstSetBit();
 
+                return *this;
+            }
+
+            inline FSetBitIterator& operator--()
+            {
+                // reverse iteration support (clang requires it for TContainerIterator::operator--)
+                if (CurrentBitIndex > 0)
+                {
+                    --CurrentBitIndex;
+                    this->WordIndex = CurrentBitIndex >> NumBitsPerDWORDLogTwo;
+                    this->Mask = 1 << (CurrentBitIndex & (NumBitsPerDWORD - 1));
+                    UnvisitedBitMask = this->Mask;
+                    BaseBitIndex = CurrentBitIndex & ~(NumBitsPerDWORD - 1);
+                }
                 return *this;
             }
 

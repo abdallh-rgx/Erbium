@@ -5,7 +5,9 @@
 #include "../Public/FortPlayerControllerAthena.h"
 #include "../Public/FortPlayerPawnAthena.h"
 #include "../Public/FortWeapon.h"
+#ifndef __ANDROID__
 #include <ShlObj.h>
+#endif
 
 uint32_t OnItemInstanceAddedVft;
 

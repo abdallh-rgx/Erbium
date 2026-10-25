@@ -147,7 +147,7 @@ struct FPrioActor
     bool bIsRelevant;
     bool bLevelInitializedForActor;
 
-    bool operator<(FPrioActor& _Rhs)
+    bool operator<(const FPrioActor& _Rhs) const
     {
         return Priority < _Rhs.Priority;
     }
@@ -296,7 +296,7 @@ void ServerReplicateActors(UNetDriver* Driver, float DeltaSeconds)
                     for (auto& Viewer : Viewers)
                     {
                         auto DistanceSquared = (Loc - Viewer->ViewLocation).SizeSquared();
-                        SmallestDisSquared = (float)min(SmallestDisSquared, DistanceSquared);
+                        SmallestDisSquared = (float)std::min((double)SmallestDisSquared, (double)DistanceSquared);
 
                         if (bDoCullCheck && DistanceSquared > Actor->NetCullDistanceSquared)
                             ViewersThatSkipActor++;

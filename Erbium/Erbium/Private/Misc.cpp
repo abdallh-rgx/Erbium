@@ -34,7 +34,7 @@ uint32 Misc::CheckCheckpointHeartBeat()
     return -1;
 }
 
-void Misc::ApplyHomebaseEffectsOnPlayerSetup(__int64* a1, __int64 a2, __int64 a3, __int64 a4, UObject* a5, char a6, unsigned __int8 a7)
+void Misc::ApplyHomebaseEffectsOnPlayerSetup(__int64* a1, __int64 a2, __int64 a3, __int64 a4, UObject* a5, char a6, uint8_t a7)
 {
     auto GameMode = (AFortGameModeAthena*)UWorld::GetWorld()->AuthorityGameMode;
     if (GameMode->HasWarmupRequiredPlayerCount())

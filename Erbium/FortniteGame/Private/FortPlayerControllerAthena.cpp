@@ -3014,7 +3014,7 @@ void AFortPlayerControllerAthena::ServerTeleportToPlaygroundLobbyIsland(UObject*
 {
     Stack.IncrementCode();
 
-    printf(__FUNCTION__ "\n");
+    LOGI("%s", __FUNCTION__);
     auto PlayerController = (AFortPlayerControllerAthena*)Context;
 
     auto GameMode = (AFortGameModeAthena*)UWorld::GetWorld()->AuthorityGameMode;

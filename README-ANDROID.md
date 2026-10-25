@@ -89,3 +89,49 @@ Two runner types, because tools and targets differ:
 - [ ] Backend integration (Voltronite + Owen.c, adb reverse)
 - [ ] Solo match entry on emulator
 - [ ] Multi-version matrix
+
+---
+
+## v2 — FULL server port (this branch: `android-port`)
+
+The complete Erbium gameserver now compiles and runs on Android ARM64 — not
+just the v1 flip-and-open milestone:
+
+| Concern | Implementation |
+|---|---|
+| Entry | `entry.cpp` → `ErbiumAndroidMain()` → full `Main()` (SDK → hooks → flip → terrain) |
+| SDK bootstrap | `android/erbium/SDKBootstrap.cpp` — version-string detect + baked fast-path + universal runtime chains |
+| Finders | `android/erbium/Finders-Android.cpp` — the Erbium-Android **v6** catalog: 89 functions × 11 versions, version-clustered ARM64 patterns (755 verified-unique) + RT:: chains for everything else |
+| Hooking | `android/erbium/HookingARM64.cpp` — native ARM64 inline hooks (trampoline + PC-relative relocation), RET/RetTrue/Nop/InvertBranch patches |
+| Memcury | `android/erbium/Memcury.h` — ELF64 scanner (same API as Windows PE version) + FindFunctionCall/FindNameRef |
+| Strings | UE-on-Android uses UTF-8 TCHAR — `FString` is `TArray<char>` with converting ctors; FName ctor takes `const char*` |
+| Alloc/Realloc | runtime discovery of the FMemory::Realloc wrapper (GMalloc → vtable slot; slot 5 on UE4-5.2, slot 7 on UE5.3+) |
+| GUI/curl | compiled out (logcat `tag:Erbium`; webhook disabled) |
+
+### Baked versions (fast path; chains cover all others)
+
+`5.41 · 7.40 · 9.41 · 13.40 · 17.50 · 18.40 · 19.10 · 21.30 · 22.40 · 23.50 · 30.00`
+
+Each build bakes one version (`-DERBIUM_TARGET_VERSION=…`); at runtime the
+library verifies the loaded game's release string — if it differs, every
+offset falls back to the runtime chains (string anchors → wrapper scans →
+ADRP extraction), so ONE binary works on any 5.x→30.00 build.
+
+### Build
+
+```bash
+cmake -B build -S android -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 \
+  -DERBIUM_TARGET_VERSION=21.30
+cmake --build build
+```
+
+CI: `.github/workflows/android-full-server.yml` builds all 11 versions and
+uploads per-version artifacts.
+
+### The mining data
+
+`android/Generated/sdk-*.h` are generated from real-binary analysis
+(11 reference ARM64 builds from the public FNAndroidBuildsArchive):
+`android/erbium/bake.py` consumes the mining JSON + the v6 catalog.

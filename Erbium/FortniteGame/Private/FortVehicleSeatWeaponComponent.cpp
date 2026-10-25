@@ -5,7 +5,7 @@
 
 void UFortVehicleSeatWeaponComponent::EquipVehicleWeapon(UFortVehicleSeatWeaponComponent* _this, AFortPlayerPawnAthena* FortPawn, FWeaponSeatDefinition* WeaponSeatDefinition, int ItemLevel)
 {
-    printf(__FUNCTION__ "\n");
+    LOGI("%s", __FUNCTION__);
 
     auto PlayerController = (AFortPlayerControllerAthena*)FortPawn->Controller;
 
@@ -117,7 +117,7 @@ void UFortVehicleSeatWeaponComponent::OnPawnEnterSeat(UFortVehicleSeatWeaponComp
 // or find the proper way to do it
 void UFortVehicleSeatWeaponComponent::UnEquipVehicleWeapon(UFortVehicleSeatWeaponComponent* _this, AFortPlayerPawnAthena* FortPawn, FWeaponSeatDefinition* WeaponSeatDefinition, bool bRequiresEquipValidWeapon)
 {
-    printf(__FUNCTION__ "\n");
+    LOGI("%s", __FUNCTION__);
 
     return UnEquipVehicleWeaponOG(_this, FortPawn, WeaponSeatDefinition, bRequiresEquipValidWeapon);
 }

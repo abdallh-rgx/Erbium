@@ -9,7 +9,7 @@
                       ? 0x100                                                                                                                                                                                         \
                       : (std::is_same_v<__VA_ARGS__, UClass*> ? 0x400 : (std::is_same_v<__VA_ARGS__, uint8> ? 0x1000000020040 : (std::is_base_of_v<UObject, std::remove_pointer_t<__VA_ARGS__>> ? 0x10000 : 0)))))
 
-std::vector<void (*)()> _Inits;
+inline std::vector<void (*)()> _Inits;
 
 #define UCLASS_COMMON_MEMBERS(__Class)                                                                                                                                                                                \
     static const SDK::UClass* StaticClass()                                                                                                                                                                           \
@@ -70,7 +70,7 @@ std::vector<void (*)()> _Inits;
         return _size;                                                                                                                                                                                                 \
     }                                                                                                                                                                                                                 \
                                                                                                                                                                                                                       \
-    __Class& operator=(__Class& _Rhs)                                                                                                                                                                                 \
+    __Class& operator=(const __Class& _Rhs)                                                                                                                                                                                 \
     {                                                                                                                                                                                                                 \
         memcpy((PBYTE)this, (const PBYTE) & _Rhs, Size());                                                                                                                                                            \
         return *this;                                                                                                                                                                                                 \
@@ -107,14 +107,9 @@ std::vector<void (*)()> _Inits;
         return Name##__Offset != -1;                                                                                                                                                                                  \
     }                                                                                                                                                                                                                 \
                                                                                                                                                                                                                       \
-    __VA_ARGS__& Set##Name(__VA_ARGS__&& Value) const                                                                                                                                                                 \
+    __VA_ARGS__ Set##Name(__VA_ARGS__ Value) const                                                                                                                                  \
     {                                                                                                                                                                                                                 \
-        return Get##Name() = Value;                                                                                                                                                                                   \
-    }                                                                                                                                                                                                                 \
-                                                                                                                                                                                                                      \
-    __VA_ARGS__& Set##Name(__VA_ARGS__& Value) const                                                                                                                                                                  \
-    {                                                                                                                                                                                                                 \
-        return Get##Name() = Value;                                                                                                                                                                                   \
+        Get##Name() = Value;                                                                                                                                                                                   \
     }                                                                                                                                                                                                                 \
                                                                                                                                                                                                                       \
     __declspec(property(get = Get##Name, put = Set##Name)) __VA_ARGS__ Name;
@@ -173,14 +168,9 @@ std::vector<void (*)()> _Inits;
         return Name##__Offset != -1;                                                                                                                                                                                  \
     }                                                                                                                                                                                                                 \
                                                                                                                                                                                                                       \
-    __VA_ARGS__& Set##Name(__VA_ARGS__&& Value) const                                                                                                                                                                 \
+    __VA_ARGS__ Set##Name(__VA_ARGS__ Value) const                                                                                                                                  \
     {                                                                                                                                                                                                                 \
-        return Get##Name() = Value;                                                                                                                                                                                   \
-    }                                                                                                                                                                                                                 \
-                                                                                                                                                                                                                      \
-    __VA_ARGS__& Set##Name(__VA_ARGS__& Value) const                                                                                                                                                                  \
-    {                                                                                                                                                                                                                 \
-        return Get##Name() = Value;                                                                                                                                                                                   \
+        Get##Name() = Value;                                                                                                                                                                                   \
     }                                                                                                                                                                                                                 \
                                                                                                                                                                                                                       \
     __declspec(property(get = Get##Name, put = Set##Name)) __VA_ARGS__ Name;

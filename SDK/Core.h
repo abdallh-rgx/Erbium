@@ -10,7 +10,13 @@ typedef int64_t int64;
 typedef int32_t int32;
 typedef int16_t int16;
 typedef int8_t int8;
+#ifdef __ANDROID__
+// Android: module base resolved from /proc/self/maps at startup (set by the
+// entry point before anything else touches it).
+extern uint64_t ImageBase;
+#else
 inline uint64_t ImageBase = *(uint64_t*)(__readgsqword(0x60) + 0x10);
+#endif
 
 namespace SDK
 {
@@ -29,23 +35,40 @@ namespace SDK
 
         FName(const wchar_t* String)
         {
+#ifdef __ANDROID__
+            // Android UE: TCHAR is UTF-8 char — convert then call the char* ctor.
+            auto& FName__Ctor = (void (*&)(FName*, const char*, int))Offsets::FNameConstructor;
+            FName__Ctor(this, ErbiumAndroid::WideToUtf8(String).c_str(), 1);
+#else
             auto& FName__Ctor = (void (*&)(FName*, const wchar_t*, int))Offsets::FNameConstructor;
 
             FName__Ctor(this, String, 1);
+#endif
         }
 
         FName(UEAllocatedWString String)
         {
+#ifdef __ANDROID__
+            auto& FName__Ctor = (void (*&)(FName*, const char*, int))Offsets::FNameConstructor;
+            FName__Ctor(this, ErbiumAndroid::WideToUtf8(String.c_str()).c_str(), 1);
+#else
             auto& FName__Ctor = (void (*&)(FName*, const wchar_t*, int))Offsets::FNameConstructor;
 
             FName__Ctor(this, String.c_str(), 1);
+#endif
         }
 
         FName(FString String)
         {
+#ifdef __ANDROID__
+            auto& FName__Ctor = (void (*&)(FName*, const char*, int))Offsets::FNameConstructor;
+
+            FName__Ctor(this, String.CStr(), 1);
+#else
             auto& FName__Ctor = (void (*&)(FName*, const wchar_t*, int))Offsets::FNameConstructor;
 
             FName__Ctor(this, String.CStr(), 1);
+#endif
         }
 
         bool IsValid() const
@@ -649,7 +672,7 @@ namespace SDK
             else if constexpr (std::is_reference_v<decltype(args)>)
             {
                 // if ((Param.PropertyFlags & 0x2) != 0)
-                //	memcpy((PBYTE)&Arg, (const PBYTE)(__int64(Mem) + Param.Offset), Param.ElementSize);
+                //      memcpy((PBYTE)&Arg, (const PBYTE)(__int64(Mem) + Param.Offset), Param.ElementSize);
             }
             i++;
         }(), ...);
@@ -1101,23 +1124,48 @@ namespace SDK
         class FString SubPathString;
     };
 
+#ifdef __ANDROID__
+    // Android UE: TCHAR = char (UTF-8). Convert wide callers to UTF-8.
+    __forceinline static const UObject* StaticFindObject(const wchar_t* ObjectPath, const UClass* Class)
+    {
+        auto StaticFindObjectInternal = (UObject * (*)(const UClass*, UObject*, const char*, bool)) SDK::Offsets::StaticFindObject;
+        return StaticFindObjectInternal(Class, nullptr, ErbiumAndroid::WideToUtf8(ObjectPath).c_str(), false);
+    }
+#else
     __forceinline static const UObject* StaticFindObject(const wchar_t* ObjectPath, const UClass* Class)
     {
         auto StaticFindObjectInternal = (UObject * (*)(const UClass*, UObject*, const wchar_t*, bool)) SDK::Offsets::StaticFindObject;
         return StaticFindObjectInternal(Class, nullptr, ObjectPath, false);
     }
+#endif
 
+#ifdef __ANDROID__
+    __forceinline static const UObject* StaticLoadObject(const wchar_t* ObjectPath, const UClass* InClass, UObject* Outer = nullptr)
+    {
+        auto StaticLoadObjectInternal = (UObject * (*)(const UClass*, UObject*, const char*, const char*, uint32_t, UObject*, bool, void*)) SDK::Offsets::StaticLoadObject;
+        return StaticLoadObjectInternal(InClass, Outer, ErbiumAndroid::WideToUtf8(ObjectPath).c_str(), nullptr, 0, nullptr, false, nullptr);
+    }
+#else
     __forceinline static const UObject* StaticLoadObject(const wchar_t* ObjectPath, const UClass* InClass, UObject* Outer = nullptr)
     {
         auto StaticLoadObjectInternal = (UObject * (*)(const UClass*, UObject*, const wchar_t*, const wchar_t*, uint32_t, UObject*, bool, void*)) SDK::Offsets::StaticLoadObject;
         return StaticLoadObjectInternal(InClass, Outer, ObjectPath, nullptr, 0, nullptr, false, nullptr);
     }
+#endif
 
     static const UObject* FindObject(const wchar_t* ObjectPath, const UClass* Class)
     {
         auto Object = StaticFindObject(ObjectPath, Class);
         return Object ? Object : StaticLoadObject(ObjectPath, Class);
     }
+
+#ifdef __ANDROID__
+    static const UObject* FindObject(const char* ObjectPath, const UClass* Class)
+    {
+        // Android: FString is UTF-8 — reuse the wide path via conversion
+        return FindObject(UEAllocatedWString(ErbiumAndroid::Utf8ToWide(ObjectPath).c_str()).c_str(), Class);
+    }
+#endif
 
     template <typename _Ot>
     static const _Ot* FindObject(const wchar_t* ObjectPath, const UClass* Class = _Ot::StaticClass())

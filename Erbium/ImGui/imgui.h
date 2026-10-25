@@ -1649,7 +1649,7 @@ enum ImGuiDataType_
     ImGuiDataType_S32,    // int
     ImGuiDataType_U32,    // unsigned int
     ImGuiDataType_S64,    // long long / __int64
-    ImGuiDataType_U64,    // unsigned long long / unsigned __int64
+    ImGuiDataType_U64,    // unsigned long long / uint64_t
     ImGuiDataType_Float,  // float
     ImGuiDataType_Double, // double
     ImGuiDataType_Bool,   // bool (provided for user convenience, not supported by scalar widgets)

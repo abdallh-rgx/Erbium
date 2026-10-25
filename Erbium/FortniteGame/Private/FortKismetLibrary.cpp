@@ -119,7 +119,7 @@ void UFortKismetLibrary::K2_RemoveItemFromPlayer(UObject* Context, FFrame& Stack
         *Ret = 0;
         return;
     }
-    printf(__FUNCTION__ " %s %d\n", ItemDefinition->Name.ToString().c_str(), AmountToRemove);
+    printf("[%s] %s %d\n", __FUNCTION__, ItemDefinition->Name.ToString().c_str(), AmountToRemove);
 
     auto ItemP = PlayerController->WorldInventory->Inventory.ItemInstances.Search([&](UFortWorldItem* entry) { return entry->ItemEntry.ItemDefinition == ItemDefinition; });
     auto itemEntry = PlayerController->WorldInventory->Inventory.ReplicatedEntries.Search([&](FFortItemEntry& entry) { return entry.ItemDefinition == ItemDefinition; }, FFortItemEntry::Size());
@@ -321,7 +321,7 @@ int32 RemoveItemFromPlayer(AFortPlayerControllerAthena* PlayerController, UFortI
     if (!PlayerController || !PlayerController->WorldInventory || !ItemDefinition)
         return 0;
 
-    printf(__FUNCTION__ " %s %d\n", ItemDefinition->Name.ToString().c_str(), AmountToRemove);
+    printf("[%s] %s %d\n", __FUNCTION__, ItemDefinition->Name.ToString().c_str(), AmountToRemove);
 
     auto ItemP = PlayerController->WorldInventory->Inventory.ItemInstances.Search([&](UFortWorldItem* entry) { return entry->ItemEntry.ItemDefinition == ItemDefinition; });
     auto itemEntry = PlayerController->WorldInventory->Inventory.ReplicatedEntries.Search([&](FFortItemEntry& entry) { return entry.ItemDefinition == ItemDefinition; }, FFortItemEntry::Size());

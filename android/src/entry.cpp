@@ -20,6 +20,12 @@
 #include "owen.h"
 #include "platform.h"
 
+// Full Erbium server bootstrap (SDK::Init → hooks → GIs flip → terrain open).
+// Defined in android/erbium/dllmain-android.cpp; reads the engine module base
+// from ImageBase (android/erbium/Finders-Android-stubs.cpp).
+extern "C" void ErbiumAndroidMain();
+extern uint64_t ImageBase;
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -214,6 +220,10 @@ namespace Erbium
             LOGI("engine module: %s base=0x%lx size=0x%zx path=%s",
                  engineName, (unsigned long)info.base, info.size, info.path);
 
+        // Feed the engine base to the full Erbium port (Memcury/RT/SDK).
+        ImageBase = info.base ? info.base : engineBase;
+        LOGI("ImageBase = 0x%llx", (unsigned long long)ImageBase);
+
 #ifdef ERBIUM_HAS_OWEN
         // Install the backend redirect BEFORE any Epic HTTP request fires —
         // login happens while the frontend loads, long before GEngine exists.
@@ -278,34 +288,23 @@ namespace Erbium
             return;
         }
 
-        // 3) Wait for the GO signal (login + lobby first!), then flip the
-        //    client/server flags. .bss is writable — no mprotect dance needed.
+        // 3) Wait for the GO signal (login + lobby first!), then run the FULL
+        //    Erbium server bring-up: SDK::Init → Null/RetTrue patches → hooks →
+        //    GIsClient=false/GIsServer=true → LocalPlayers.Remove(0) → open the
+        //    terrain map. (v2: replaces the v1 minimal flip+open.)
         if (!WaitForGoFile())
             return; // unreachable (waits forever) — keeps logic explicit
         const int delay = SettleDelaySeconds();
-        LOGI("GO received — settling %ds before flag flip...", delay);
+        LOGI("GO received — settling %ds before server bring-up...", delay);
         std::this_thread::sleep_for(std::chrono::seconds(delay));
 
-        volatile bool* isClient = (volatile bool*)(engineBase + Baked::kGIsClient);
-        volatile bool* isServer = (volatile bool*)(engineBase + Baked::kGIsServer);
-        LOGI("pre-flip: GIsClient=%d GIsServer=%d", (int)*isClient, (int)*isServer);
-        *isClient = false;
-        *isServer = true;
-        LOGI("POST-FLIP: GIsClient=%d GIsServer=%d  → this process is now a game server",
-             (int)(bool)*isClient, (int)(bool)*isServer);
+        LOGI("launching FULL Erbium server bootstrap (ErbiumAndroidMain)...");
+        ErbiumAndroidMain();
 
-        // 4) Open the battle-royale terrain map as a listen server.
-        const char* cmd = ConsoleCommandForVersion();
-        if (!RunConsoleCommand(env, libHandle, cmd))
-        {
-            LOGE("console command dispatch failed — engine may still accept it later");
-        }
-
-        // v1 milestone: map-hosting bring-up. Phase-3 adds:
-        //  - LocalPlayers removal (GameInstance->LocalPlayers.Remove(0))
-        //  - NetDriver/InitListen hooking for LAN discovery
-        //  - Owen.c-style backend redirect for the login flow
-        LOGI("Erbium v1 bootstrap complete — watching for map load...");
+        // The full bootstrap handles: SDK init, patches, hooks, GIs flip,
+        // local-player removal, and the terrain open (via the game's own
+        // ExecuteConsoleCommand path from the SDK — same as Windows Erbium).
+        LOGI("Erbium full bootstrap dispatched — watch logcat tag:Erbium");
     }
 } // namespace Erbium
 
