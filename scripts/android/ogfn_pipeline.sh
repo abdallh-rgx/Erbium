@@ -112,7 +112,7 @@ collect_artifacts() {
   logcat_grep 'Erbium|POST-FLIP|GO |Lawin|Node|FATAL|SIGSEGV|ANR ' 600 \
     > "$ARTIFACTS/logcat-digest.txt" 2>/dev/null || true
 }
-trap 'collect_artifacts' EXIT
+trap 'collect_artifacts; [ -n "${LAWIN_PID:-}" ] && kill "$LAWIN_PID" 2>/dev/null || true' EXIT
 
 # ═══════════════════════ 0. preflight ═════════════════════════════════════
 hr "phase 0 — preflight"
@@ -126,175 +126,72 @@ case "$(device_abilist)" in
   *) die "no arm64 translation on this image (abilist=$(device_abilist))" ;;
 esac
 
-# ═══════════════════ 1. OGFN backend (all via adb) ════════════════════════
-hr "phase 1 — OGFN Manager + LawinServer backend"
+# ═══════════════════ 1. LawinServer backend ═══════════════════════════════
+hr "phase 1 — LawinServer backend (node on HOST + adb reverse)"
+# run14 lesson: node's V8 JIT emits native ARM64 at runtime — ndk_translation
+# can't translate JIT'd code (SIGILL in NodeJSThread). So the backend CANNOT
+# run inside the x86_64 emulator. Instead: run LawinServer with the runner's
+# own node (x86_64, fast) and wire the device's 127.0.0.1:8080/3001 to it
+# with `adb reverse` — no root, no OGFN app, no Shizuku needed. libsinum
+# inside the patched game redirects Epic domains to 127.0.0.1:8080, which
+# now tunnels to the host.
 
-if [ "$(shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -c "package:$OGFN_PKG$" || true)" -lt 1 ]; then
-  install_apk "$OGFN_APK" "$OGFN_PKG" || die "cannot install OGFN manager"
-else
-  ok "OGFN manager already installed"
+if ! command -v node >/dev/null 2>&1; then
+  # GitHub runners have node preinstalled; local runs may not
+  sudo apt-get install -y -qq nodejs >/dev/null 2>&1 || die "node.js not available"
+fi
+NODE_VER=$(node --version)
+ok "host node: $NODE_VER"
+
+# extract LawinServer-main from the OGFN apk (it's just an asset folder)
+WORK_LS="$ARTIFACTS/lawinserver"
+rm -rf "$WORK_LS"; mkdir -p "$WORK_LS"
+unzip -o -q "$OGFN_APK" "assets/LawinServer-main/*" -d "$WORK_LS" \
+  || die "cannot extract LawinServer from OGFN apk"
+mv "$WORK_LS/assets/LawinServer-main" "$WORK_LS/main"
+[ -f "$WORK_LS/main/index.js" ] || die "index.js missing after extraction"
+ok "LawinServer extracted ($(du -sh "$WORK_LS/main" | cut -f1))"
+
+# config sanity: matchmaker must point the game at ITSELF (Erbium listens
+# on 7777 inside the game process on the device)
+CFG="$WORK_LS/main/Config/config.ini"
+if [ -f "$CFG" ]; then
+  sed -i 's/^ip=.*/ip=127.0.0.1/; s/^port=.*/port=7777/' "$CFG" || true
+  grep -A2 "\[GameServer\]" "$CFG" | head -3
 fi
 
-# 1a. battery optimization exemption (user requirement — background survival)
-shell_dev "dumpsys deviceidle whitelist +$OGFN_PKG" >/dev/null 2>&1 || true
-shell_dev "dumpsys deviceidle whitelist +$GAME_PKG" >/dev/null 2>&1 || true
-ok "battery-optimization whitelisted ($OGFN_PKG, $GAME_PKG)"
+# start node on the host (background, log to file)
+LAWIN_LOG="$ARTIFACTS/lawinserver.log"
+PORT=8080 nohup node "$WORK_LS/main/index.js" > "$LAWIN_LOG" 2>&1 &
+LAWIN_PID=$!
+log "LawinServer pid=$LAWIN_PID (PORT=8080, XMPP/matchmaker on 3001)"
 
-# 1b. stop leftovers from previous runs
-shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
-sleep 1
+# wire the device loopback to the host backend
+adb_dev reverse tcp:8080 tcp:8080 || die "adb reverse 8080 failed"
+adb_dev reverse tcp:3001 tcp:3001 || die "adb reverse 3001 failed"
+ok "adb reverse: device 127.0.0.1:8080/:3001 → host node"
 
-# 1c. Deploy LawinServer + permanent_id — via the PATCHED OGFN build
-#     (ogfn-erbium-signed.apk: setPermanentId("ErbiumCI") + initialize()
-#     injected straight into MainActivity.onCreate — no UI, no touch,
-#     no root: launching the app ONCE does everything).
-#     Fallback if the patched APK is not the one supplied: the two legacy
-#     paths below (adb-root direct, or UI-driven onboarding).
-WORK_LS="$(mktemp -d)"
-ONBOARDING_DONE=0
-OGFN_IS_PATCHED=0
-
-# patched build? check our marker string in the dex
-if unzip -p "$OGFN_APK" classes.dex 2>/dev/null | grep -qa "ErbiumCI"; then
-  OGFN_IS_PATCHED=1
-fi
-
-if [ "$OGFN_IS_PATCHED" = "1" ]; then
-  log "OGFN is the Erbium-patched build (receiver-injected) — the FIRST"
-  log "broadcast itself writes permanent_id + extracts LawinServer. The"
-  log "retry loop below re-fires until node is up."
-  ONBOARDING_DONE=1
-elif [ "${ADB_ROOTED:-0}" = "1" ]; then
-  # ── PATH A: direct deployment (root) ────────────────────────────────
-  log "PATH A: direct LawinServer deployment via adb root"
-  unzip -o -q "$OGFN_APK" "assets/LawinServer-main/*" -d "$WORK_LS" \
-    || die "cannot extract LawinServer from OGFN apk"
-  tar -C "$WORK_LS/assets/LawinServer-main" -czf "$WORK_LS/lawin.tgz" .
-  shell_dev "rm -rf /data/local/tmp/lawin.tgz /data/data/$OGFN_PKG/files/LawinServer" || true
-  adb_dev push "$WORK_LS/lawin.tgz" /data/local/tmp/lawin.tgz \
-    || die "cannot push LawinServer tarball"
-  shell_dev "mkdir -p /data/data/$OGFN_PKG/files/LawinServer && tar -xzf /data/local/tmp/lawin.tgz -C /data/data/$OGFN_PKG/files/LawinServer && rm -f /data/local/tmp/lawin.tgz" \
-    || die "cannot extract LawinServer on device"
-  shell_dev "mkdir -p /data/data/$OGFN_PKG/shared_prefs" || true
-  cat > "$WORK_LS/backend_prefs.xml" <<'EOF'
-<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
-<map>
-    <string name="permanent_id">ErbiumCI</string>
-</map>
-EOF
-  adb_dev push "$WORK_LS/backend_prefs.xml" "/data/local/tmp/backend_prefs.xml" \
-    || die "cannot push backend_prefs.xml"
-  shell_dev "cp /data/local/tmp/backend_prefs.xml /data/data/$OGFN_PKG/shared_prefs/backend_prefs.xml && rm -f /data/local/tmp/backend_prefs.xml" \
-    || die "cannot install backend_prefs.xml"
-  APPUID=$(shell_dev "stat -c '%u' /data/data/$OGFN_PKG" 2>/dev/null | tr -d '\r')
-  [ -n "$APPUID" ] && shell_dev "chown -R ${APPUID}:${APPUID} /data/data/$OGFN_PKG/files/LawinServer /data/data/$OGFN_PKG/shared_prefs" || true
-  ok "onboarding marked complete (PATH A, uid=${APPUID:-?})"
-  ONBOARDING_DONE=1
-else
-  # ── PATH B: drive the app's own onboarding (no root) ───────────────
-  # (kept for completeness — runs 5-8 proved touch injection is unreliable
-  #  on user-build images; the patched build above avoids it entirely)
-  log "PATH B: OGFN onboarding via UI automation (no adb root on this image)"
-  shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
-  sleep 6
-  screenshot ogfn_launch
-  DEVSAFE_SEEN=0
-  ONB_T0=$(date +%s)
-  ONB_TIMEOUT=300
-  LAST_SHOT=-15
-  onb_screen_has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
-  while :; do
-    ELAPSED=$(( $(date +%s) - ONB_T0 ))
-    [ "$ELAPSED" -ge "$ONB_TIMEOUT" ] && break
-    if [ $((ELAPSED - LAST_SHOT)) -ge 15 ]; then
-      screenshot "onb" >/dev/null 2>&1 || true; LAST_SHOT=$ELAPSED
-    fi
-    XMLF=$(ui_dump 2>/dev/null || true)
-    XML=""
-    [ -n "$XMLF" ] && [ -f "$XMLF" ] && XML=$(cat "$XMLF")
-    [ -z "$XML" ] && { sleep 3; continue; }
-    if ! onb_screen_has "$XML" "$OGFN_PKG"; then
-      key_back; sleep 2; continue
-    fi
-    if onb_screen_has "$XML" "Have fun"; then
-      screenshot ogfn_success
-      ok "onboarding completed via UI"
-      ONBOARDING_DONE=1
-      key_back || true; sleep 2
-      shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
-      sleep 2
-      break
-    fi
-    if onb_screen_has "$XML" "JOIN DISCORD TO CONTINUE"; then
-      DEVSAFE_SEEN=$((DEVSAFE_SEEN + 1))
-      log "onb: DeveloperSafety arm (seen=${DEVSAFE_SEEN})"
-      ui_emu_tap_from_file "$XMLF" "JOIN DISCORD TO CONTINUE" || emu_tap 540 1637
-      sleep 3; continue
-    fi
-    if onb_screen_has "$XML" "PROCEED IN"; then sleep 3; continue; fi
-    if onb_screen_has "$XML" "PROCEED"; then
-      ui_emu_tap_from_file "$XMLF" "PROCEED" || emu_tap 540 1637
-      sleep 3; continue
-    fi
-    if onb_screen_has "$XML" "I understand"; then
-      log "onb: Disclaimer boxes"
-      python3 - "$XMLF" <<'PYM' > /tmp/onb_boxes.txt 2>/dev/null || true
-import sys, re
-xml = open(sys.argv[1]).read()
-for m in re.finditer(r'<node[^>]*/>', xml):
-    tag = m.group(0)
-    if 'I understand' in tag:
-        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-        if bm: print((int(bm.group(1))+int(bm.group(3)))//2, (int(bm.group(2))+int(bm.group(4)))//2)
-PYM
-      while read -r bx by; do [ -n "$bx" ] && emu_tap "$bx" "$by" && sleep 1; done < /tmp/onb_boxes.txt
-      sleep 1
-      ui_emu_tap_from_file "$XMLF" "CONTINUE" || emu_tap 540 2120
-      sleep 3; continue
-    fi
-    if onb_screen_has "$XML" "Username"; then
-      log "onb: InputName"
-      ui_emu_tap_from_file "$XMLF" "Username" || emu_tap 540 1000
-      sleep 1
-      type_text "ErbiumCI"; sleep 1
-      key_enter 2>/dev/null || true
-      ui_emu_tap_from_file "$XMLF" "CONFIRM" || emu_tap 540 2120
-      sleep 3; continue
-    fi
-    sleep 4
-  done
-  [ "$ONBOARDING_DONE" != "1" ] && warn "onboarding UI path did not complete"
-fi
-
-# 1e. ask OGFN itself whether it agrees (result=1 = complete)# 1e. ask OGFN itself whether it agrees (result=1 = complete)
-ONB=$(shell_dev "am broadcast -a ${OGFN_PKG}.CHECK_ONBOARDING" 2>/dev/null | grep -oE 'result=[0-9]+' | head -1)
-log "CHECK_ONBOARDING → ${ONB:-?} (result=1 means complete; onboarding_done=$ONBOARDING_DONE)"
-
-# 1f. START THE BACKEND — retry the broadcast: the patched build may still
-#     be extracting LawinServer when the first one lands (initialize() is a
-#     coroutine; START_BACKEND fails cleanly on a missing index.js).
-logcat_clear
-P8080=0; WAITED=0; TRIES=0
-while [ "$WAITED" -lt 600 ]; do
-  P8080=$(shell_dev "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c ':1F90'" | tr -d '\r')
-  [ "${P8080:-0}" -ge 1 ] && break
-  TRIES=$((TRIES + 1))
-  shell_dev "am broadcast -a ${OGFN_PKG}.START_BACKEND -n $OGFN_PKG/.core.BackendBroadcastReceiver" >/dev/null 2>&1
-  WAITED=$((WAITED + 15)); sleep 15
+# wait for HTTP :8080 on the host (node needs a moment)
+P8080=0; WAITED=0
+while [ "$WAITED" -lt 60 ]; do
+  if curl -s -o /dev/null --max-time 3 "http://127.0.0.1:8080/" 2>/dev/null; then
+    P8080=1; break
+  fi
+  # any HTTP answer (even 404) counts — curl exits 0 on HTTP errors with -o
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:8080/" 2>/dev/null)
+  [ "${code:-0}" != "000" ] && { P8080=1; break; }
+  WAITED=$((WAITED + 3)); sleep 3
 done
-logcat_grep 'BackendReceiver|BackendService|NodeJSThread|onboarding' 30 || true
-if [ "${P8080:-0}" -lt 1 ]; then
-  screenshot backend_failed
-  shell_dev "ls -la /data/data/$OGFN_PKG/files/ 2>/dev/null; head -c 2000 /data/data/$OGFN_PKG/files/native_crash_log.txt 2>/dev/null" || true
-  die "LawinServer HTTP :8080 never came up (see logcat above + native_crash_log)"
+if [ "$P8080" != "1" ]; then
+  tail -30 "$LAWIN_LOG" || true
+  die "LawinServer never answered on :8080 (see lawinserver.log)"
 fi
-ok "LawinServer HTTP :8080 LISTENING (after ${WAITED}s)"
+ok "LawinServer HTTP :8080 answering (after ${WAITED}s)"
 
-# matchmaker WS 3001 = 0x0BB9 (XMPP starts with the HTTP server)
-P3001=$(shell_dev "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c ':0BB9'" | tr -d '\r')
-[ "${P3001:-0}" -ge 1 ] || warn "port 3001 (matchmaker) not up yet — XMPP starts with HTTP"
-ok "LawinServer: HTTP :8080 ✓   matchmaker :3001 ${P3001:-0}✓"
-verdict PASS "backend up (LawinServer :8080, matchmaker :3001)"
+# prove the DEVICE can reach it through the reverse tunnel
+DEVPROBE=$(shell_dev "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/ 2>/dev/null" | tr -d '\r')
+log "device-side probe of 127.0.0.1:8080 → HTTP ${DEVPROBE:-?} (000 = tunnel broken)"
+verdict PASS "backend up (LawinServer on host :8080 + reverse tunnel, device probe=${DEVPROBE:-?})"
 
 # ═══════════════ 2. patched game install + launch ═════════════════════════
 hr "phase 2 — patched Fortnite (Erbium inside)"
