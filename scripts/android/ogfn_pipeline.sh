@@ -193,7 +193,8 @@ else
   sleep 6
   screenshot ogfn_launch
 
-  ONB_T0=$(timer_start)
+  ONB_T0=$(date +%s)   # NOTE: plain seconds — timer_start/timer_s are a
+                       # millisecond pair; mixing them breaks arithmetic
   ONB_TIMEOUT=420   # the SettingUp extraction takes a while (node_modules!)
   LAST_SHOT=-15
   # one ui dump per cycle, then match against it locally (each ui_find is
