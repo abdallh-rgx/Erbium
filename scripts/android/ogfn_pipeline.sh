@@ -208,7 +208,9 @@ else
     if [ $((ELAPSED - LAST_SHOT)) -ge 15 ]; then
       screenshot "onb" >/dev/null 2>&1 || true; LAST_SHOT=$ELAPSED
     fi
-    XML=$(ui_dump 2>/dev/null || echo "")
+    XMLF=$(ui_dump 2>/dev/null || true)
+    XML=""
+    [ -n "$XMLF" ] && [ -f "$XMLF" ] && XML=$(cat "$XMLF")
     [ -z "$XML" ] && { sleep 3; continue; }
 
     # ── success screen: done! ─────────────────────────────────────────
