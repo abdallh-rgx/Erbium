@@ -213,6 +213,12 @@ else
     [ -n "$XMLF" ] && [ -f "$XMLF" ] && XML=$(cat "$XMLF")
     [ -z "$XML" ] && { sleep 3; continue; }
 
+    # if a tap opened the browser/another app over OGFN — come back
+    if ! onb_screen_has "$XML" "$OGFN_PKG"; then
+      log "onb: left the OGFN app (browser/chooser opened?) — BACK"
+      key_back; sleep 2; continue
+    fi
+
     # ── success screen: done! ─────────────────────────────────────────
     if onb_screen_has "$XML" "Have fun"; then
       screenshot ogfn_success
@@ -229,57 +235,58 @@ else
     #    while counting the button reads "PROCEED IN Xs"; plain "PROCEED"
     #    (no "IN") actually continues. ─────────────────────────────────
     if onb_screen_has "$XML" "JOIN DISCORD TO CONTINUE"; then
-      log "onb: DeveloperSafety — arming countdown"
-      ui_tap_text "JOIN DISCORD TO CONTINUE" >/dev/null 2>&1 || tap_pct 50 88
-      sleep 2; continue
+      log "onb: DeveloperSafety — arming countdown (emu_tap)"
+      ui_emu_tap_from_file "$XMLF" "JOIN DISCORD TO CONTINUE" || emu_tap 540 1637
+      sleep 3; continue
     fi
     if onb_screen_has "$XML" "PROCEED IN"; then
       sleep 3; continue          # countdown running — just wait
     fi
-    if onb_screen_has "$XML" ">PROCEED<" || onb_screen_has "$XML" "PROCEED"; then
-      log "onb: DeveloperSafety — PROCEED"
-      ui_tap_text "PROCEED" >/dev/null 2>&1 || tap_pct 50 88
-      sleep 2; continue
+    if onb_screen_has "$XML" "PROCEED"; then
+      log "onb: DeveloperSafety — PROCEED (emu_tap)"
+      ui_emu_tap_from_file "$XMLF" "PROCEED" || emu_tap 540 1637
+      sleep 3; continue
     fi
 
     # ── Disclaimer: three "I understand..." checkboxes + CONTINUE ─────
     if onb_screen_has "$XML" "I understand"; then
-      log "onb: Disclaimer — checking all boxes"
-      ui_tap_all "I understand" >/dev/null 2>&1
+      log "onb: Disclaimer — checking all boxes (emu_tap)"
+      # tap every checkbox row
+      python3 - "$XMLF" <<'PYM' > /tmp/onb_boxes.txt
+import sys, re
+xml = open(sys.argv[1]).read()
+for m in re.finditer(r'<node[^>]*/>', xml):
+    tag = m.group(0)
+    if 'I understand' in tag:
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if bm: print((int(bm.group(1))+int(bm.group(3)))//2, (int(bm.group(2))+int(bm.group(4)))//2)
+PYM
+      while read -r bx by; do [ -n "$bx" ] && emu_tap "$bx" "$by" && sleep 1; done < /tmp/onb_boxes.txt
       sleep 1
       screenshot ogfn_disclaimer
-      ui_tap_text "CONTINUE" >/dev/null 2>&1 || tap_pct 50 93
+      ui_emu_tap_from_file "$XMLF" "CONTINUE" || emu_tap 540 2120
       sleep 3; continue
     fi
 
     # ── InputName: Username field + CONFIRM ──────────────────────────
     if onb_screen_has "$XML" "Username"; then
-      log "onb: InputName — typing ErbiumCI"
-      local_xy=$(python3 - "$XML" <<'PYM'
-import sys, re
-xml = sys.argv[1]
-for m in re.finditer(r'<node[^>]*/>|<node[^>]*>', xml):
-    tag = m.group(0)
-    if 'Username' in tag:
-        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
-        if bm:
-            print((int(bm.group(1))+int(bm.group(3)))//2, (int(bm.group(2))+int(bm.group(4)))//2)
-            break
-PYM
-) && shell_dev input tap $local_xy
+      log "onb: InputName — typing ErbiumCI (emu_tap)"
+      ui_emu_tap_from_file "$XMLF" "Username" || emu_tap 540 1000
       sleep 1
       type_text "ErbiumCI"; sleep 1
       key_enter 2>/dev/null || true
       screenshot ogfn_name
-      ui_tap_text "CONFIRM" >/dev/null 2>&1 || tap_pct 50 93
+      ui_emu_tap_from_file "$XMLF" "CONFIRM" || emu_tap 540 2120
       sleep 3; continue
     fi
 
     # ── DevNotice gate ("Developer Notice" title, discord link) ──────
     if onb_screen_has "$XML" "Developer Notice"; then
-      log "onb: DevNotice — tapping the primary button"
-      # the only action button on that screen
-      tap_pct 50 88; sleep 3; continue
+      # DevNotice = StepDeveloperSafety with the notice title (verified
+      # run3-5: same screen, JOIN-DISCORD button arms a 10s countdown)
+      log "onb: DevNotice/DeveloperSafety — emu_tap primary"
+      ui_emu_tap_from_file "$XMLF" "JOIN DISCORD TO CONTINUE" || emu_tap 540 1637
+      sleep 3; continue
     fi
 
     # ── progress/spinner screens: just wait ───────────────────────────

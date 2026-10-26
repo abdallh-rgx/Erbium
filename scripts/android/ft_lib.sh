@@ -346,6 +346,49 @@ mt_sendevent_fingers() {  # <dev> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4>
   shell_dev "$ev" >/dev/null 2>&1
 }
 
+emu_tap() {  # <x> <y> — SINGLE-finger tap via the emulator console.
+  # `input tap` silently does nothing on some user-build images; the console
+  # channel (`adb emu event send`) injects kernel-grade events and always
+  # works on emulators.
+  adb_dev emu event send \
+    EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:400 \
+    EV_ABS:ABS_MT_POSITION_X:$1 EV_ABS:ABS_MT_POSITION_Y:$2 \
+    EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
+  sleep 0.4
+  adb_dev emu event send \
+    EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:4294967295 \
+    EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
+  sleep 0.2
+}
+
+# find node bounds center by text/content substring in a DUMP FILE, then
+# emu_tap it. Usage: ui_emu_tap_from_file <xmlfile> <needle>
+ui_emu_tap_from_file() {
+  local xmlfile=$1 needle=$2
+  local xy
+  xy=$(python3 - "$xmlfile" "$needle" <<'PY'
+import sys, re
+xml = open(sys.argv[1]).read()
+needle = sys.argv[2].lower()
+best = None
+for m in re.finditer(r'<node[^>]*/>|<node[^>]*>', xml):
+    tag = m.group(0)
+    tm = re.search(r'text="([^"]*)"', tag)
+    dm = re.search(r'content-desc="([^"]*)"', tag)
+    hay = ((tm.group(1) if tm else "") + " " + (dm.group(1) if dm else "")).lower()
+    if needle in hay:
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if bm:
+            best = ((int(bm.group(1))+int(bm.group(3)))//2, (int(bm.group(2))+int(bm.group(4)))//2)
+            break
+if best: print(best[0], best[1])
+PY
+)
+  [ -n "$xy" ] || return 1
+  log "ui-emu: tapping '$needle' at $xy"
+  emu_tap $xy
+}
+
 mt_emu_fingers() {  # <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4> — emulator console
   local xs=("$1" "$3" "$5" "$7") ys=("$2" "$4" "$6" "$8")
   local args=()
