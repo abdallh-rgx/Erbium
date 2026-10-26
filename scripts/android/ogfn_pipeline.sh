@@ -185,65 +185,107 @@ EOF
   ONBOARDING_DONE=1
 else
   # ── PATH B: drive the app's own onboarding (no root) ───────────────
+  # Order-adaptive state machine: whatever screen shows up, act on it.
+  # (run2 lesson: DeveloperSafety with "JOIN DISCORD TO CONTINUE" came
+  #  FIRST — never assume the step order.)
   log "PATH B: OGFN onboarding via UI automation (no adb root on this image)"
   shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
   sleep 6
   screenshot ogfn_launch
 
-  # step 1: Disclaimer — three "I understand ..." checkboxes + CONTINUE
-  if ui_wait_text "Important Notice" 60; then
-    ui_tap_all "I understand" >/dev/null; sleep 1
-    screenshot ogfn_disclaimer
-    ui_tap_text "CONTINUE" || tap_pct 50 93
-    sleep 3
-  else
-    warn "disclaimer screen not found — maybe already onboarded?"
-  fi
+  ONB_T0=$(timer_start)
+  ONB_TIMEOUT=420   # the SettingUp extraction takes a while (node_modules!)
+  LAST_SHOT=-15
+  # one ui dump per cycle, then match against it locally (each ui_find is
+  # a full adb round-trip — 6 of them per loop would crawl)
+  onb_screen_has() {  # <xml> <needle> → 0/1
+    case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
+  }
+  while :; do
+    ELAPSED=$(( $(date +%s) - ONB_T0 ))
+    [ "$ELAPSED" -ge "$ONB_TIMEOUT" ] && break
+    if [ $((ELAPSED - LAST_SHOT)) -ge 15 ]; then
+      screenshot "onb" >/dev/null 2>&1 || true; LAST_SHOT=$ELAPSED
+    fi
+    XML=$(ui_dump 2>/dev/null || echo "")
+    [ -z "$XML" ] && { sleep 3; continue; }
 
-  # step 2: InputName — field + CONFIRM
-  if ui_wait_text "Username" 45; then
-    local_xy=$(ui_find "Username") && shell_dev input tap $local_xy; sleep 1
-    type_text "ErbiumCI"; sleep 1
-    key_enter 2>/dev/null || true
-    screenshot ogfn_name
-    ui_tap_text "CONFIRM" || tap_pct 50 93
-    sleep 3
-  else
-    warn "username screen not found"
-  fi
+    # ── success screen: done! ─────────────────────────────────────────
+    if onb_screen_has "$XML" "Have fun"; then
+      screenshot ogfn_success
+      ok "onboarding completed (app extracted LawinServer + wrote permanent_id)"
+      ONBOARDING_DONE=1
+      ui_tap_text "START" 2>/dev/null || ui_tap_text "GO" 2>/dev/null || key_back || true
+      sleep 2
+      shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
+      sleep 2
+      break
+    fi
 
-  # step 3: DeveloperSafety — button starts a countdown ("PROCEED IN Xs")
-  #         first tap arms it; wait for the plain "PROCEED" then tap again.
-  if ui_wait_text "PROCEED" 45; then
-    ui_tap_text "PROCEED" || tap_pct 50 93      # arms the countdown
-    sleep 2
-    # wait for the countdown to finish (the "IN " disappears)
-    T0=$(timer_start)
-    while [ "$(timer_s)" -lt 40 ]; do
-      xy=$(ui_find "PROCEED IN") || break        # countdown gone
-      sleep 3
-    done
-    ui_tap_text "PROCEED" || tap_pct 50 93       # actually proceed
-    sleep 3
-    screenshot ogfn_safety
-  else
-    warn "safety screen not found"
-  fi
+    # ── DeveloperSafety: "JOIN DISCORD TO CONTINUE" arms a countdown;
+    #    while counting the button reads "PROCEED IN Xs"; plain "PROCEED"
+    #    (no "IN") actually continues. ─────────────────────────────────
+    if onb_screen_has "$XML" "JOIN DISCORD TO CONTINUE"; then
+      log "onb: DeveloperSafety — arming countdown"
+      ui_tap_text "JOIN DISCORD TO CONTINUE" >/dev/null 2>&1 || tap_pct 50 88
+      sleep 2; continue
+    fi
+    if onb_screen_has "$XML" "PROCEED IN"; then
+      sleep 3; continue          # countdown running — just wait
+    fi
+    if onb_screen_has "$XML" ">PROCEED<" || onb_screen_has "$XML" "PROCEED"; then
+      log "onb: DeveloperSafety — PROCEED"
+      ui_tap_text "PROCEED" >/dev/null 2>&1 || tap_pct 50 88
+      sleep 2; continue
+    fi
 
-  # step 4: SettingUp — the app extracts LawinServer + writes permanent_id.
-  #         Ends with StepSuccess "Have fun, <name>".
-  if ui_wait_text "Have fun" 240; then
-    screenshot ogfn_success
-    ok "onboarding completed (app extracted LawinServer + wrote permanent_id)"
-    ONBOARDING_DONE=1
-    # finish: any button / back
-    ui_tap_text "START" 2>/dev/null || ui_tap_text "GO" 2>/dev/null || key_back || true
-    sleep 2
-    shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
-    sleep 2
-  else
+    # ── Disclaimer: three "I understand..." checkboxes + CONTINUE ─────
+    if onb_screen_has "$XML" "I understand"; then
+      log "onb: Disclaimer — checking all boxes"
+      ui_tap_all "I understand" >/dev/null 2>&1
+      sleep 1
+      screenshot ogfn_disclaimer
+      ui_tap_text "CONTINUE" >/dev/null 2>&1 || tap_pct 50 93
+      sleep 3; continue
+    fi
+
+    # ── InputName: Username field + CONFIRM ──────────────────────────
+    if onb_screen_has "$XML" "Username"; then
+      log "onb: InputName — typing ErbiumCI"
+      local_xy=$(python3 - "$XML" <<'PYM'
+import sys, re
+xml = sys.argv[1]
+for m in re.finditer(r'<node[^>]*/>|<node[^>]*>', xml):
+    tag = m.group(0)
+    if 'Username' in tag:
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if bm:
+            print((int(bm.group(1))+int(bm.group(3)))//2, (int(bm.group(2))+int(bm.group(4)))//2)
+            break
+PYM
+) && shell_dev input tap $local_xy
+      sleep 1
+      type_text "ErbiumCI"; sleep 1
+      key_enter 2>/dev/null || true
+      screenshot ogfn_name
+      ui_tap_text "CONFIRM" >/dev/null 2>&1 || tap_pct 50 93
+      sleep 3; continue
+    fi
+
+    # ── DevNotice gate ("Developer Notice" title, discord link) ──────
+    if onb_screen_has "$XML" "Developer Notice"; then
+      log "onb: DevNotice — tapping the primary button"
+      # the only action button on that screen
+      tap_pct 50 88; sleep 3; continue
+    fi
+
+    # ── progress/spinner screens: just wait ───────────────────────────
+    sleep 4
+  done
+
+  if [ "$ONBOARDING_DONE" != "1" ]; then
     screenshot ogfn_setup_stuck
-    warn "onboarding 'Have fun' never appeared — backend start may fail"
+    warn "onboarding did not reach 'Have fun' in ${ONB_TIMEOUT}s — backend start may fail"
   fi
 fi
 
