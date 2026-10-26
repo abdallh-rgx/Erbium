@@ -257,13 +257,14 @@ is_installed() {
   return 1
 }
 
-install_apk() {  # <apk>
-  local apk=$1
+install_apk() {  # <apk> [package]
+  local apk=$1 pkg=${2:-$GAME_PKG}
   [ -f "$apk" ] || { err "APK not found: $apk"; return 1; }
   log "installing $apk ..."
   adb_dev install -r -t "$apk" 2>&1 | tee -a "$ARTIFACTS/install.log" | tail -2
-  is_installed || { err "install failed — see $ARTIFACTS/install.log"; return 1; }
-  ok "installed"
+  shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$pkg$" \
+    || { err "install failed — see $ARTIFACTS/install.log"; return 1; }
+  ok "installed ($pkg)"
 }
 
 # ─────────────────────────── input ─────────────────────────────────────────

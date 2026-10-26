@@ -129,8 +129,8 @@ esac
 # ═══════════════════ 1. OGFN backend (all via adb) ════════════════════════
 hr "phase 1 — OGFN Manager + LawinServer backend"
 
-if ! is_installed "$OGFN_PKG"; then
-  install_apk "$OGFN_APK" || die "cannot install OGFN manager"
+if ! shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$OGFN_PKG$"; then
+  install_apk "$OGFN_APK" "$OGFN_PKG" || die "cannot install OGFN manager"
 else
   ok "OGFN manager already installed"
 fi
@@ -187,24 +187,44 @@ log "CHECK_ONBOARDING → ${ONB:-?} (result=1 means complete)"
 # 1f. START THE BACKEND
 logcat_clear
 shell_dev "am broadcast -a ${OGFN_PKG}.START_BACKEND -n $OGFN_PKG/.core.BackendBroadcastReceiver" >/dev/null
-logcat_wait 'LawinServer started listening|listening on port|node.*started' 180 "LawinServer node start" \
-  || { screenshot backend_failed; die "LawinServer did not start (logcat digest below)"; }
 
-# 1g. verify ports: HTTP 8080 (0x1F90) + matchmaker 3001 (0x0BB9)
-P8080=$(shell_dev "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c ':1F90'" | tr -d '\r')
+# node's stdout goes to a FILE (not logcat) — poll the port instead.
+# HTTP 8080 = 0x1F90 in /proc/net/tcp
+P8080=0; WAITED=0
+while [ "$WAITED" -lt 180 ]; do
+  P8080=$(shell_dev "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c ':1F90'" | tr -d '\r')
+  [ "${P8080:-0}" -ge 1 ] && break
+  # the receiver logs its decisions — surface them for debugging
+  WAITED=$((WAITED + 5)); sleep 5
+done
+logcat_grep 'BackendReceiver|BackendService|NodeJSThread|onboarding' 30 || true
+if [ "${P8080:-0}" -lt 1 ]; then
+  screenshot backend_failed
+  shell_dev "ls -la /data/data/$OGFN_PKG/files/ 2>/dev/null; head -c 2000 /data/data/$OGFN_PKG/files/native_crash_log.txt 2>/dev/null" || true
+  die "LawinServer HTTP :8080 never came up (see logcat above + native_crash_log)"
+fi
+ok "LawinServer HTTP :8080 LISTENING (after ${WAITED}s)"
+
+# matchmaker WS 3001 = 0x0BB9 (XMPP starts with the HTTP server)
 P3001=$(shell_dev "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c ':0BB9'" | tr -d '\r')
-[ "${P8080:-0}" -ge 1 ] || die "port 8080 (LawinServer HTTP) not listening"
 [ "${P3001:-0}" -ge 1 ] || warn "port 3001 (matchmaker) not up yet — XMPP starts with HTTP"
 ok "LawinServer: HTTP :8080 ✓   matchmaker :3001 ${P3001:-0}✓"
 verdict PASS "backend up (LawinServer :8080, matchmaker :3001)"
 
 # ═══════════════ 2. patched game install + launch ═════════════════════════
 hr "phase 2 — patched Fortnite (Erbium inside)"
-if ! is_installed "$GAME_PKG"; then
-  install_apk "$GAME_APK" || die "cannot install patched fortnite ($GAME_PKG)"
+if ! shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$GAME_PKG$"; then
+  install_apk "$GAME_APK" "$GAME_PKG" || die "cannot install patched fortnite ($GAME_PKG)"
 else
   ok "patched fortnite already installed ($GAME_PKG)"
 fi
+
+# tell Erbium's owen-redirect (if it installs) where the backend REALLY is —
+# LawinServer on the device itself. libsinum already redirects, this is a
+# belt-and-braces for the Erbium-side redirect.
+shell_dev "printf 'http://127.0.0.1:8080' > /data/local/tmp/erbium.backend" || true
+shell_dev "rm -f $GO_FILE" || true   # fresh run: GO gate re-armed
+ok "erbium.backend=http://127.0.0.1:8080 written, GO gate re-armed"
 screenshot game_installed
 
 logcat_clear
