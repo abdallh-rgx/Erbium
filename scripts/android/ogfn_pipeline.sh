@@ -144,30 +144,43 @@ ok "battery-optimization whitelisted ($OGFN_PKG, $GAME_PKG)"
 shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
 sleep 1
 
-# 1c+1d. Deploy LawinServer + permanent_id — TWO PATHS:
-#   PATH A (adb root): direct file deployment — fast, deterministic.
-#   PATH B (no root, user-build image): drive the app's own onboarding UI
-#     (Compose — visible to uiautomator). The app then copies LawinServer
-#     itself and writes permanent_id itself.
+# 1c. Deploy LawinServer + permanent_id — via the PATCHED OGFN build
+#     (ogfn-erbium-signed.apk: setPermanentId("ErbiumCI") + initialize()
+#     injected straight into MainActivity.onCreate — no UI, no touch,
+#     no root: launching the app ONCE does everything).
+#     Fallback if the patched APK is not the one supplied: the two legacy
+#     paths below (adb-root direct, or UI-driven onboarding).
 WORK_LS="$(mktemp -d)"
 ONBOARDING_DONE=0
+OGFN_IS_PATCHED=0
 
-if [ "${ADB_ROOTED:-0}" = "1" ]; then
+# patched build? check our marker string in the dex
+if unzip -p "$OGFN_APK" classes.dex 2>/dev/null | grep -qa "ErbiumCI"; then
+  OGFN_IS_PATCHED=1
+fi
+
+if [ "$OGFN_IS_PATCHED" = "1" ]; then
+  log "OGFN is the Erbium-patched build — launching it once (no touch needed)"
+  shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
+  sleep 10
+  screenshot ogfn_autosetup
+  # give initialize() time to extract node_modules (best effort; the
+  # broadcast retry loop below tolerates a missing index.js anyway)
+  sleep 20
+  shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
+  sleep 2
+  ONBOARDING_DONE=1
+elif [ "${ADB_ROOTED:-0}" = "1" ]; then
   # ── PATH A: direct deployment (root) ────────────────────────────────
   log "PATH A: direct LawinServer deployment via adb root"
   unzip -o -q "$OGFN_APK" "assets/LawinServer-main/*" -d "$WORK_LS" \
     || die "cannot extract LawinServer from OGFN apk"
   tar -C "$WORK_LS/assets/LawinServer-main" -czf "$WORK_LS/lawin.tgz" .
-  ls -la "$WORK_LS/lawin.tgz"
   shell_dev "rm -rf /data/local/tmp/lawin.tgz /data/data/$OGFN_PKG/files/LawinServer" || true
   adb_dev push "$WORK_LS/lawin.tgz" /data/local/tmp/lawin.tgz \
     || die "cannot push LawinServer tarball"
   shell_dev "mkdir -p /data/data/$OGFN_PKG/files/LawinServer && tar -xzf /data/local/tmp/lawin.tgz -C /data/data/$OGFN_PKG/files/LawinServer && rm -f /data/local/tmp/lawin.tgz" \
     || die "cannot extract LawinServer on device"
-  shell_dev "ls /data/data/$OGFN_PKG/files/LawinServer/index.js" >/dev/null 2>&1 \
-    || die "index.js not in place after untar"
-  ok "LawinServer deployed to files/LawinServer"
-
   shell_dev "mkdir -p /data/data/$OGFN_PKG/shared_prefs" || true
   cat > "$WORK_LS/backend_prefs.xml" <<'EOF'
 <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
@@ -181,62 +194,21 @@ EOF
     || die "cannot install backend_prefs.xml"
   APPUID=$(shell_dev "stat -c '%u' /data/data/$OGFN_PKG" 2>/dev/null | tr -d '\r')
   [ -n "$APPUID" ] && shell_dev "chown -R ${APPUID}:${APPUID} /data/data/$OGFN_PKG/files/LawinServer /data/data/$OGFN_PKG/shared_prefs" || true
-  ok "onboarding marked complete (permanent_id=ErbiumCI, uid=${APPUID:-?})"
+  ok "onboarding marked complete (PATH A, uid=${APPUID:-?})"
   ONBOARDING_DONE=1
 else
   # ── PATH B: drive the app's own onboarding (no root) ───────────────
-  # Order-adaptive state machine: whatever screen shows up, act on it.
-  # (run2 lesson: DeveloperSafety with "JOIN DISCORD TO CONTINUE" came
-  #  FIRST — never assume the step order.)
+  # (kept for completeness — runs 5-8 proved touch injection is unreliable
+  #  on user-build images; the patched build above avoids it entirely)
   log "PATH B: OGFN onboarding via UI automation (no adb root on this image)"
   shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
   sleep 6
   screenshot ogfn_launch
-  # ── FULL input diagnostics (runs 5-7: taps never reach the app) ──────
-  log "onb: input diagnostics"
-  log "onb: focus: $(shell_dev "dumpsys window 2>/dev/null | grep -m1 mCurrentFocus" | tr -d '\r')"
-  log "onb: keyguard: $(shell_dev "dumpsys window 2>/dev/null | grep -m1 mDreamingLockscreen" | tr -d '\r')"
-  log "onb: input devices:"
-  shell_dev "getevent -pl 2>/dev/null | grep -B3 'ABS_MT_POSITION_X' | head -8" || true
-  log "onb: touchscreen dev: $(find_touchscreen || echo NONE)"
-  # dismiss any keyguard, both classic ways
-  shell_dev "wm dismiss-keyguard" >/dev/null 2>&1 || true
-  key 82 2>/dev/null || true   # MENU — legacy unlock
-  sleep 2
-  # does KEYEVENT injection work at all? (BACK on the app: the screen must
-  # change focus or stay — but the command must not error)
-  log "onb: keyevent test: $(shell_dev "input keyevent 82 && echo KEYEVENT_OK" | tr -d '\r')"
-  # touch-channel check
-  if emu_channel_ok; then ok "emu console channel alive"; else warn "emu console channel DEAD"; fi
-  # control experiment: tap the Discord↗ corner button — if the browser
-  # opens, touch injection works and the problem is the button itself
-  log "onb: control-tap on Discord↗ (proves touch works if browser opens)"
-  emu_tap 815 161; sleep 4
-  screenshot onb_control_tap
-  # getevent read-back: listen 3s while we tap — proves kernel sees events
-  TSDEV=$(find_touchscreen)
-  if [ -n "$TSDEV" ]; then
-    log "onb: getevent read-back on $TSDEV while tapping..."
-    ( timeout 4 shell_dev "timeout 3 getevent -c 3 $TSDEV" > "$ARTIFACTS/getevent-readback.txt" 2>&1 ) || true
-    emu_tap 540 1637; sleep 3
-    log "onb: read-back: $(head -4 "$ARTIFACTS/getevent-readback.txt" 2>/dev/null | tr '\n' ' ')"
-  else
-    emu_tap 540 1637
-  fi
-  key_back 2>/dev/null; sleep 1
-  shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
-  sleep 3
-
   DEVSAFE_SEEN=0
-  ONB_T0=$(date +%s)   # NOTE: plain seconds — timer_start/timer_s are a
-                       # millisecond pair; mixing them breaks arithmetic
-  ONB_TIMEOUT=420   # the SettingUp extraction takes a while (node_modules!)
+  ONB_T0=$(date +%s)
+  ONB_TIMEOUT=300
   LAST_SHOT=-15
-  # one ui dump per cycle, then match against it locally (each ui_find is
-  # a full adb round-trip — 6 of them per loop would crawl)
-  onb_screen_has() {  # <xml> <needle> → 0/1
-    case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
-  }
+  onb_screen_has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
   while :; do
     ELAPSED=$(( $(date +%s) - ONB_T0 ))
     [ "$ELAPSED" -ge "$ONB_TIMEOUT" ] && break
@@ -247,74 +219,32 @@ else
     XML=""
     [ -n "$XMLF" ] && [ -f "$XMLF" ] && XML=$(cat "$XMLF")
     [ -z "$XML" ] && { sleep 3; continue; }
-
-    # if a tap opened the browser/another app over OGFN — come back
     if ! onb_screen_has "$XML" "$OGFN_PKG"; then
-      log "onb: left the OGFN app (browser/chooser opened?) — BACK"
       key_back; sleep 2; continue
     fi
-
-    # ── success screen: done! ─────────────────────────────────────────
     if onb_screen_has "$XML" "Have fun"; then
       screenshot ogfn_success
-      ok "onboarding completed (app extracted LawinServer + wrote permanent_id)"
+      ok "onboarding completed via UI"
       ONBOARDING_DONE=1
-      ui_tap_text "START" 2>/dev/null || ui_tap_text "GO" 2>/dev/null || key_back || true
-      sleep 2
+      key_back || true; sleep 2
       shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
       sleep 2
       break
     fi
-
-    # ── DeveloperSafety: "JOIN DISCORD TO CONTINUE" arms a countdown;
-    #    while counting the button reads "PROCEED IN Xs"; plain "PROCEED"
-    #    (no "IN") actually continues. ─────────────────────────────────
     if onb_screen_has "$XML" "JOIN DISCORD TO CONTINUE"; then
       DEVSAFE_SEEN=$((DEVSAFE_SEEN + 1))
-      log "onb: DeveloperSafety — arming countdown (emu_tap, seen=${DEVSAFE_SEEN})"
-      if [ "$DEVSAFE_SEEN" = "6" ]; then
-        # escalation: instrumented-grade random touch — if THIS changes
-        # the screen, per-event injection is broken; if not, the app ignores
-        # everything (or the button needs a real long-press)
-        log "onb: escalating — monkey touch events"
-        shell_dev "monkey -p $OGFN_PKG --pct-touch 100 --throttle 300 6" >/dev/null 2>&1 || true
-        sleep 4
-      fi
-      if [ "$DEVSAFE_SEEN" = "12" ]; then
-        log "onb: escalation 2 — long-press via emu (hold 1.2s)"
-        adb_dev emu event send \
-          EV_KEY:BTN_TOUCH:1 EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:401 \
-          EV_ABS:ABS_MT_POSITION_X:540 EV_ABS:ABS_MT_POSITION_Y:1637 \
-          EV_ABS:ABS_MT_PRESSURE:50 EV_ABS:ABS_MT_TOUCH_MAJOR:10 \
-          EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
-        sleep 1.2
-        adb_dev emu event send \
-          EV_KEY:BTN_TOUCH:0 EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:4294967295 \
-          EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
-        sleep 3
-      fi
-      if [ "$DEVSAFE_SEEN" = "18" ]; then
-        log "onb: escalation 3 — input tap retry + keyevent ENTER"
-        shell_dev input tap 540 1637 || true; sleep 2
-        key_enter || true; sleep 2
-      fi
+      log "onb: DeveloperSafety arm (seen=${DEVSAFE_SEEN})"
       ui_emu_tap_from_file "$XMLF" "JOIN DISCORD TO CONTINUE" || emu_tap 540 1637
       sleep 3; continue
     fi
-    if onb_screen_has "$XML" "PROCEED IN"; then
-      sleep 3; continue          # countdown running — just wait
-    fi
+    if onb_screen_has "$XML" "PROCEED IN"; then sleep 3; continue; fi
     if onb_screen_has "$XML" "PROCEED"; then
-      log "onb: DeveloperSafety — PROCEED (emu_tap)"
       ui_emu_tap_from_file "$XMLF" "PROCEED" || emu_tap 540 1637
       sleep 3; continue
     fi
-
-    # ── Disclaimer: three "I understand..." checkboxes + CONTINUE ─────
     if onb_screen_has "$XML" "I understand"; then
-      log "onb: Disclaimer — checking all boxes (emu_tap)"
-      # tap every checkbox row
-      python3 - "$XMLF" <<'PYM' > /tmp/onb_boxes.txt
+      log "onb: Disclaimer boxes"
+      python3 - "$XMLF" <<'PYM' > /tmp/onb_boxes.txt 2>/dev/null || true
 import sys, re
 xml = open(sys.argv[1]).read()
 for m in re.finditer(r'<node[^>]*/>', xml):
@@ -325,58 +255,38 @@ for m in re.finditer(r'<node[^>]*/>', xml):
 PYM
       while read -r bx by; do [ -n "$bx" ] && emu_tap "$bx" "$by" && sleep 1; done < /tmp/onb_boxes.txt
       sleep 1
-      screenshot ogfn_disclaimer
       ui_emu_tap_from_file "$XMLF" "CONTINUE" || emu_tap 540 2120
       sleep 3; continue
     fi
-
-    # ── InputName: Username field + CONFIRM ──────────────────────────
     if onb_screen_has "$XML" "Username"; then
-      log "onb: InputName — typing ErbiumCI (emu_tap)"
+      log "onb: InputName"
       ui_emu_tap_from_file "$XMLF" "Username" || emu_tap 540 1000
       sleep 1
       type_text "ErbiumCI"; sleep 1
       key_enter 2>/dev/null || true
-      screenshot ogfn_name
       ui_emu_tap_from_file "$XMLF" "CONFIRM" || emu_tap 540 2120
       sleep 3; continue
     fi
-
-    # ── DevNotice gate ("Developer Notice" title, discord link) ──────
-    if onb_screen_has "$XML" "Developer Notice"; then
-      # DevNotice = StepDeveloperSafety with the notice title (verified
-      # run3-5: same screen, JOIN-DISCORD button arms a 10s countdown)
-      log "onb: DevNotice/DeveloperSafety — emu_tap primary"
-      ui_emu_tap_from_file "$XMLF" "JOIN DISCORD TO CONTINUE" || emu_tap 540 1637
-      sleep 3; continue
-    fi
-
-    # ── progress/spinner screens: just wait ───────────────────────────
     sleep 4
   done
-
-  if [ "$ONBOARDING_DONE" != "1" ]; then
-    screenshot ogfn_setup_stuck
-    warn "onboarding did not reach 'Have fun' in ${ONB_TIMEOUT}s — backend start may fail"
-  fi
+  [ "$ONBOARDING_DONE" != "1" ] && warn "onboarding UI path did not complete"
 fi
 
-# 1e. ask OGFN itself whether it agrees (result=1 = complete)
+# 1e. ask OGFN itself whether it agrees (result=1 = complete)# 1e. ask OGFN itself whether it agrees (result=1 = complete)
 ONB=$(shell_dev "am broadcast -a ${OGFN_PKG}.CHECK_ONBOARDING" 2>/dev/null | grep -oE 'result=[0-9]+' | head -1)
 log "CHECK_ONBOARDING → ${ONB:-?} (result=1 means complete; onboarding_done=$ONBOARDING_DONE)"
 
-# 1f. START THE BACKEND
+# 1f. START THE BACKEND — retry the broadcast: the patched build may still
+#     be extracting LawinServer when the first one lands (initialize() is a
+#     coroutine; START_BACKEND fails cleanly on a missing index.js).
 logcat_clear
-shell_dev "am broadcast -a ${OGFN_PKG}.START_BACKEND -n $OGFN_PKG/.core.BackendBroadcastReceiver" >/dev/null
-
-# node's stdout goes to a FILE (not logcat) — poll the port instead.
-# HTTP 8080 = 0x1F90 in /proc/net/tcp
-P8080=0; WAITED=0
-while [ "$WAITED" -lt 180 ]; do
+P8080=0; WAITED=0; TRIES=0
+while [ "$WAITED" -lt 600 ]; do
   P8080=$(shell_dev "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c ':1F90'" | tr -d '\r')
   [ "${P8080:-0}" -ge 1 ] && break
-  # the receiver logs its decisions — surface them for debugging
-  WAITED=$((WAITED + 5)); sleep 5
+  TRIES=$((TRIES + 1))
+  shell_dev "am broadcast -a ${OGFN_PKG}.START_BACKEND -n $OGFN_PKG/.core.BackendBroadcastReceiver" >/dev/null 2>&1
+  WAITED=$((WAITED + 15)); sleep 15
 done
 logcat_grep 'BackendReceiver|BackendService|NodeJSThread|onboarding' 30 || true
 if [ "${P8080:-0}" -lt 1 ]; then

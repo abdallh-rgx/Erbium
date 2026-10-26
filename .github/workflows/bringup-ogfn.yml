@@ -161,7 +161,8 @@ jobs:
           if [ -n "${{ github.event.inputs.ogfn_apk_url }}" ]; then
             curl -fsSL --retry 3 -o artifacts/ogfn.apk "${{ github.event.inputs.ogfn_apk_url }}"
           else
-            gh release download ogfn-assets --pattern "ogfn-by-dhyper.apk" \
+            # patched build: setPermanentId+initialize injected in onCreate
+            gh release download ogfn-assets --pattern "ogfn-erbium-signed.apk" \
               --output artifacts/ogfn.apk --repo "$GITHUB_REPOSITORY"
           fi
           if [ -n "${{ github.event.inputs.game_apk_url }}" ]; then
