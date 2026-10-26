@@ -192,13 +192,37 @@ else
   shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
   sleep 6
   screenshot ogfn_launch
-  # touch-channel diagnostics — prove we can inject BEFORE looping forever
+  # ── FULL input diagnostics (runs 5-7: taps never reach the app) ──────
+  log "onb: input diagnostics"
+  log "onb: focus: $(shell_dev "dumpsys window 2>/dev/null | grep -m1 mCurrentFocus" | tr -d '\r')"
+  log "onb: keyguard: $(shell_dev "dumpsys window 2>/dev/null | grep -m1 mDreamingLockscreen" | tr -d '\r')"
+  log "onb: input devices:"
+  shell_dev "getevent -pl 2>/dev/null | grep -B3 'ABS_MT_POSITION_X' | head -8" || true
+  log "onb: touchscreen dev: $(find_touchscreen || echo NONE)"
+  # dismiss any keyguard, both classic ways
+  shell_dev "wm dismiss-keyguard" >/dev/null 2>&1 || true
+  key 82 2>/dev/null || true   # MENU — legacy unlock
+  sleep 2
+  # does KEYEVENT injection work at all? (BACK on the app: the screen must
+  # change focus or stay — but the command must not error)
+  log "onb: keyevent test: $(shell_dev "input keyevent 82 && echo KEYEVENT_OK" | tr -d '\r')"
+  # touch-channel check
   if emu_channel_ok; then ok "emu console channel alive"; else warn "emu console channel DEAD"; fi
   # control experiment: tap the Discord↗ corner button — if the browser
   # opens, touch injection works and the problem is the button itself
   log "onb: control-tap on Discord↗ (proves touch works if browser opens)"
   emu_tap 815 161; sleep 4
   screenshot onb_control_tap
+  # getevent read-back: listen 3s while we tap — proves kernel sees events
+  TSDEV=$(find_touchscreen)
+  if [ -n "$TSDEV" ]; then
+    log "onb: getevent read-back on $TSDEV while tapping..."
+    ( timeout 4 shell_dev "timeout 3 getevent -c 3 $TSDEV" > "$ARTIFACTS/getevent-readback.txt" 2>&1 ) || true
+    emu_tap 540 1637; sleep 3
+    log "onb: read-back: $(head -4 "$ARTIFACTS/getevent-readback.txt" 2>/dev/null | tr '\n' ' ')"
+  else
+    emu_tap 540 1637
+  fi
   key_back 2>/dev/null; sleep 1
   shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
   sleep 3
