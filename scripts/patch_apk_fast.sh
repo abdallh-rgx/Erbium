@@ -7,14 +7,16 @@
 #    1. baksmali ONLY classes.dex
 #    2. edit GameActivity.smali:
 #         a. onCreate: loadLibrary("erbium") right after loadLibrary("sinum")
-#            (DHyper's OGFN builds load their redirect lib there; upstream
-#             Fortnite builds have no sinum — we inject after the first
-#             loadLibrary OR at the top of onCreate)
-#         b. add dispatchTouchEvent: 4-finger touch → forceShowConsoleWindow()
-#         c. add forceShowConsoleWindow_test → AndroidThunkJava_ShowConsoleWindow
-#    3. smali reassemble → replace classes.dex in the zip
-#    4. add lib/arm64-v8a/liberbium.so
-#    5. zipalign + sign (uber-apk-signer debug key)
+#            (DHyper's OGFN builds load their redirect lib there; vanilla
+#             builds get it injected at the top of onCreate)
+#         b. append dispatchTouchEvent: 4-finger touch → console
+#         c. append forceShowConsoleWindow_test → AndroidThunkJava_ShowConsoleWindow
+#    3. reassemble classes.dex (smali lib inside apktool.jar via a tiny
+#       wrapper — no separate smali download needed)
+#    4. python zip surgery: replace classes.dex + add lib/arm64-v8a/liberbium.so
+#    5. sign (uber-apk-signer)
+#
+#  Requirements: java 17+ (JDK with javac for the wrapper), python3, unzip, zip
 #
 #  Usage: patch_apk_fast.sh <in.apk> <out.apk> <liberbium.so> [workdir]
 # ═══════════════════════════════════════════════════════════════════════════
@@ -22,16 +24,16 @@ set -euo pipefail
 
 IN_APK="$1"; OUT_APK="$2"; LIBERBIUM="$3"; WORK="${4:-patch-work}"
 
-command -v java >/dev/null || { echo "need java 17+"; exit 1; }
+command -v javac >/dev/null || { echo "need a JDK (javac)"; exit 1; }
+command -v python3 >/dev/null || { echo "need python3"; exit 1; }
 
 IN_APK="$(realpath -m "$IN_APK")"
 OUT_APK="$(realpath -m "$OUT_APK")"
 LIBERBIUM="$(realpath -m "$LIBERBIUM")"
 WORK="$(realpath -m "$WORK")"
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BAKSMALI_JAR="${BAKSMALI_JAR:-$WORK/baksmali-2.5.2.jar}"
-SMALI_JAR="${SMALI_JAR:-$WORK/smali-2.5.2.jar}"
+APKTOOL_JAR="${APKTOOL_JAR:-$WORK/apktool_2.9.3.jar}"
 UBERSIGNER_JAR="${UBERSIGNER_JAR:-$WORK/uber-apk-signer-1.3.0.jar}"
 
 mkdir -p "$WORK"
@@ -39,79 +41,63 @@ cd "$WORK"
 
 # ── fetch tools if missing ─────────────────────────────────────────────────
 if [ ! -f "$BAKSMALI_JAR" ]; then
-  curl -fsSL -o "$BAKSMALI_JAR" "https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar"
+  curl -fsSL -o "$BAKSMALI_JAR" "https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar" \
+    || curl -fsSL -o "$BAKSMALI_JAR" "https://github.com/google/smali/releases/download/v2.5.2/baksmali-2.5.2.jar"
 fi
-if [ ! -f "$SMALI_JAR" ]; then
-  curl -fsSL -o "$SMALI_JAR" "https://bitbucket.org/JesusFreke/smali/downloads/smali-2.5.2.jar"
+if [ ! -f "$APKTOOL_JAR" ]; then
+  curl -fsSL -o "$APKTOOL_JAR" "https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar"
 fi
 if [ ! -f "$UBERSIGNER_JAR" ]; then
   curl -fsSL -o "$UBERSIGNER_JAR" "https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar"
 fi
 
-# ── extract classes.dex ────────────────────────────────────────────────────
+# ── 1. baksmali classes.dex ────────────────────────────────────────────────
 rm -rf smali-in smali-out
 mkdir -p smali-in
-unzip -o -q "$IN_APK" "classes.dex" "classes2.dex" "classes3.dex" "classes4.dex" -d smali-in || true
+unzip -o -q "$IN_APK" "classes.dex" -d smali-in
 [ -f smali-in/classes.dex ] || { echo "no classes.dex in APK"; exit 1; }
-
 java -jar "$BAKSMALI_JAR" d smali-in/classes.dex -o smali-out
 
 GA="smali-out/com/epicgames/ue4/GameActivity.smali"
 [ -f "$GA" ] || { echo "GameActivity.smali not found after baksmali"; exit 1; }
 echo "[patch] GameActivity.smali: $(wc -l < "$GA") lines"
 
-# ── 1. inject loadLibrary("erbium") into onCreate ─────────────────────────
-if ! grep -q 'loadLibrary("erbium")\|const-string v0, "erbium"' "$GA"; then
-  if grep -q 'const-string v0, "sinum"' "$GA"; then
-    # DHyper OGFN build: right after the sinum load
-    python3 - "$GA" <<'PY'
-import sys, re
+# ── 2. patch the smali ─────────────────────────────────────────────────────
+python3 - "$GA" <<'PY'
+import sys
 p = sys.argv[1]
 src = open(p).read()
-anchor = '''    const-string v0, "sinum"
+
+if 'const-string v0, "erbium"' not in src:
+    anchor = '''    const-string v0, "sinum"
 
     invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
 '''
-inject = anchor + '''
+    inject = anchor + '''
     const-string v0, "erbium"
 
     invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
 '''
-if anchor not in src:
-    print("[patch] ERROR: sinum anchor not found"); sys.exit(1)
-src = src.replace(anchor, inject, 1)
-open(p, 'w').write(src)
-print("[patch] injected loadLibrary(erbium) after sinum")
-PY
-  else
-    # vanilla Fortnite build: at the very top of onCreate
-    python3 - "$GA" <<'PY'
-import sys, re
-p = sys.argv[1]
-src = open(p).read()
-m = re.search(r'(\.method public onCreate\(Landroid/os/Bundle;\)V\n\s*\.registers \d+\n)', src)
-if not m:
-    print("[patch] ERROR: onCreate not found"); sys.exit(1)
-inject = m.group(1) + '''    const-string v0, "erbium"
+    if anchor in src:
+        src = src.replace(anchor, inject, 1)
+        print("[patch] injected loadLibrary(erbium) after sinum")
+    else:
+        import re
+        m = re.search(r'(\.method public onCreate\(Landroid/os/Bundle;\)V\n\s*\.registers \d+\n)', src)
+        if not m:
+            print("[patch] ERROR: no sinum anchor and no onCreate"); sys.exit(1)
+        inject = m.group(1) + '''    const-string v0, "erbium"
 
     invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
 '''
-src = src[:m.start()] + inject + src[m.end():]
-open(p, 'w').write(src)
-print("[patch] injected loadLibrary(erbium) at top of onCreate")
-PY
-  fi
-fi
+        src = src[:m.start()] + inject + src[m.end():]
+        print("[patch] injected loadLibrary(erbium) at top of onCreate (vanilla build)")
 
-# ── 2. add dispatchTouchEvent + forceShowConsoleWindow_test ───────────────
-if ! grep -q "forceShowConsoleWindow_test" "$GA"; then
-  cat >> "$GA" <<'SMALI'
+if 'forceShowConsoleWindow_test' not in src:
+    src += '''
 
 .method public dispatchTouchEvent(Landroid/view/MotionEvent;)Z
     .registers 4
-
-    # p0 = GameActivity (this)
-    # p1 = MotionEvent
 
     if-eqz p1, :cond_pass
 
@@ -138,39 +124,83 @@ if ! grep -q "forceShowConsoleWindow_test" "$GA"; then
 
     return-void
 .end method
-SMALI
-  echo "[patch] appended dispatchTouchEvent + forceShowConsoleWindow_test"
-fi
+'''
+    print("[patch] appended dispatchTouchEvent + forceShowConsoleWindow_test")
 
-# verify the console method exists (upstream UE4 GameActivity has it)
-grep -q "AndroidThunkJava_ShowConsoleWindow(Ljava/lang/String;)V" "$GA" \
-  || echo "[patch] WARNING: AndroidThunkJava_ShowConsoleWindow not found in GameActivity!"
+if 'AndroidThunkJava_ShowConsoleWindow(Ljava/lang/String;)V' not in src:
+    print("[patch] WARNING: AndroidThunkJava_ShowConsoleWindow missing upstream!")
 
-# ── 3. reassemble classes.dex ─────────────────────────────────────────────
-rm -f classes-new.dex
-java -jar "$SMALI_JAR" a smali-out -o classes-new.dex
+open(p, 'w').write(src)
+PY
+
+# ── 3. reassemble classes.dex (smali lib inside apktool.jar) ───────────────
+cat > Assemble.java <<'EOF'
+import brut.androlib.mod.SmaliMod;
+import com.android.tools.smali.dexlib2.Opcodes;
+import com.android.tools.smali.dexlib2.writer.builder.DexBuilder;
+import com.android.tools.smali.dexlib2.writer.io.FileDataStore;
+import java.io.File;
+import java.nio.file.*;
+import java.util.stream.*;
+
+public class Assemble {
+    public static void main(String[] args) throws Exception {
+        File dir = new File(args[0]);
+        File out = new File(args[1]);
+        int api = args.length > 2 ? Integer.parseInt(args[2]) : 29;
+        DexBuilder dex = new DexBuilder(Opcodes.forApi(api));
+        try (Stream<Path> paths = Files.walk(dir.toPath())) {
+            for (Path p : paths.filter(x -> x.toString().endsWith(".smali")).collect(Collectors.toList())) {
+                SmaliMod.assembleSmaliFile(p.toFile(), dex, api, false, false);
+            }
+        }
+        dex.writeTo(new FileDataStore(out));
+        System.out.println("assembled " + args[0] + " -> " + args[1] + " (" + out.length() + " bytes)");
+    }
+}
+EOF
+javac -cp "$APKTOOL_JAR" Assemble.java -d .
+java -cp "$APKTOOL_JAR:." Assemble smali-out classes-new.dex 29
 ls -la classes-new.dex
 
-# ── 4. zip surgery ────────────────────────────────────────────────────────
-rm -f patched-unsigned.apk
-cp "$IN_APK" patched-unsigned.apk
-# replace classes.dex (store the rest untouched)
-zip -q patched-unsigned.apk classes-new.dex   # adds at root — wrong name!
-# do it properly: update the entry named classes.dex
-zip -q -d patched-unsigned.apk classes.dex
-cd "$WORK" && mkdir -p ziproot && cp classes-new.dex ziproot/classes.dex && cd ziproot && zip -q ../patched-unsigned.apk classes.dex && cd "$WORK"
-# add liberbium.so
-mkdir -p lib/arm64-v8a
-cp "$LIBERBIUM" lib/arm64-v8a/liberbium.so
-cd lib && zip -q ../patched-unsigned.apk arm64-v8a/liberbium.so && cd "$WORK"
-echo "[patch] zip updated:"
-unzip -l patched-unsigned.apk | grep -E "classes.dex|liberbium" || true
+# ── 4. zip surgery (python for correct entry names + compression) ──────────
+python3 - "$IN_APK" classes-new.dex "$LIBERBIUM" patched-unsigned.apk <<'PY'
+import sys, zipfile
+in_apk, dex_path, lib_path, out_apk = sys.argv[1:5]
 
-# ── 5. sign ───────────────────────────────────────────────────────────────
-java -jar "$UBERSIGNER_JAR" -a patched-unsigned.apk --overwrite --allowResign
-cp patched-unsigned-aligned-debugSigned.apk "$OUT_APK" 2>/dev/null || cp patched-unsigned-debugSigned.apk "$OUT_APK" 2>/dev/null || {
-  # newer uber-signer output name
-  ls -la
-  cp "$(ls patched-unsigned*Signed*.apk | head -1)" "$OUT_APK"
-}
+zin = zipfile.ZipFile(in_apk, 'r')
+zout = zipfile.ZipFile(out_apk, 'w', zipfile.ZIP_DEFLATED, compresslevel=1)
+
+new_dex = open(dex_path, 'rb').read()
+new_lib = open(lib_path, 'rb').read()
+replaced = added = False
+
+for item in zin.infolist():
+    name = item.filename
+    if name == 'classes.dex':
+        zi = zipfile.ZipInfo(name, date_time=item.date_time)
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        zout.writestr(zi, new_dex)
+        replaced = True
+        continue
+    data = zin.read(name)
+    zi = zipfile.ZipInfo(name, date_time=item.date_time)
+    zi.compress_type = item.compress_type
+    zi.external_attr = item.external_attr
+    zout.writestr(zi, data)
+
+zi = zipfile.ZipInfo('lib/arm64-v8a/liberbium.so')
+zi.compress_type = zipfile.ZIP_DEFLATED
+zout.writestr(zi, new_lib)
+
+zout.close(); zin.close()
+z = zipfile.ZipFile(out_apk)
+assert replaced, "classes.dex not replaced!"
+assert 'lib/arm64-v8a/liberbium.so' in z.namelist(), "liberbium.so missing!"
+print(f"[zip] entries={len(z.namelist())} classes.dex={z.getinfo('classes.dex').file_size}B liberbium.so=OK")
+PY
+
+# ── 5. sign ────────────────────────────────────────────────────────────────
+java -jar "$UBERSIGNER_JAR" -a patched-unsigned.apk --overwrite --allowResign >/dev/null
+cp patched-unsigned.apk "$OUT_APK"
 echo "[patch] DONE → $OUT_APK ($(du -h "$OUT_APK" | cut -f1))"
