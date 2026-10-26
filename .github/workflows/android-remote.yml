@@ -294,21 +294,25 @@ jobs:
         env:
           TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
+          # the installer already starts tailscaled via systemd — do NOT
+          # spawn a second one (run1: "tun device busy" + socket mismatch)
           curl -fsSL https://tailscale.com/install.sh | sh || true
-          sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock &
+          sudo systemctl enable --now tailscaled 2>/dev/null || true
           sleep 3
           if [ -n "$TS_AUTHKEY" ]; then
-            sudo tailscale --socket=/tmp/tailscaled.sock up \
+            sudo tailscale up \
               --authkey="$TS_AUTHKEY" \
               --hostname="erbium-remote-${{ github.run_id }}" \
-              --accept-routes || echo "tailscale up failed"
-            IP=$(sudo tailscale --socket=/tmp/tailscaled.sock ip -4 || echo '')
+              || echo "⚠ tailscale up failed — falling back to tmate SSH only"
+            IP=$(sudo tailscale ip -4 2>/dev/null | head -1 || echo '')
             echo "TS_IP=$IP" >> "$GITHUB_ENV"
-            echo "══════════════════════════════════════════════════"
-            echo "  📱 FROM YOUR PHONE (Tailscale app ON):"
-            echo "  🖥 screen + touch:  http://$IP:6080/vnc.html"
-            echo "  🎛 control panel:   http://$IP:8081"
-            echo "══════════════════════════════════════════════════"
+            if [ -n "$IP" ]; then
+              echo "══════════════════════════════════════════════════"
+              echo "  📱 FROM YOUR PHONE (Tailscale app ON):"
+              echo "  🖥 screen + touch:  http://$IP:6080/vnc.html"
+              echo "  🎛 control panel:   http://$IP:8081"
+              echo "══════════════════════════════════════════════════"
+            fi
           else
             echo "no TAILSCALE_AUTHKEY secret — browser access disabled; use the tmate SSH line below"
           fi
@@ -316,11 +320,11 @@ jobs:
       - name: tmate SSH (terminal from Termux — always on)
         run: |
           # tmate gives an SSH line WITHOUT any account — paste into Termux
-          tmate -S /tmp/tmate.sock -f /dev/null new-session -d \
-            -t "erbium-remote" 2>/dev/null || tmate new-session -d
-          sleep 5
-          SSH_LINE=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null || tmate display -p '#{tmate_ssh}')
-          WEB_LINE=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}' 2>/dev/null || true)
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready || sleep 8
+          SSH_LINE=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' || true)
+          WEB_LINE=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}' || true)
+          [ -n "$SSH_LINE" ] || { echo "⚠ tmate session line empty"; SSH_LINE="(tmate unavailable)"; }
           {
             echo "══════════════════════════════════════════════════"
             echo "  🔌 SSH FROM TERMUX (no account needed):"
