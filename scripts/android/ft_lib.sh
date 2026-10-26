@@ -347,18 +347,30 @@ mt_sendevent_fingers() {  # <dev> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4>
 }
 
 emu_tap() {  # <x> <y> — SINGLE-finger tap via the emulator console.
-  # `input tap` silently does nothing on some user-build images; the console
-  # channel (`adb emu event send`) injects kernel-grade events and always
-  # works on emulators.
+  # Full Protocol-B sequence: BTN_TOUCH down + slot + tracking id + position
+  # + pressure + touch-major (some kernels drop MT events without them),
+  # SYN, then BTN_TOUCH up + tracking-id -1.
   adb_dev emu event send \
+    EV_KEY:BTN_TOUCH:1 \
     EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:400 \
     EV_ABS:ABS_MT_POSITION_X:$1 EV_ABS:ABS_MT_POSITION_Y:$2 \
+    EV_ABS:ABS_MT_PRESSURE:50 EV_ABS:ABS_MT_TOUCH_MAJOR:10 \
     EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
-  sleep 0.4
+  sleep 0.35
   adb_dev emu event send \
+    EV_KEY:BTN_TOUCH:0 \
     EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:4294967295 \
     EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
-  sleep 0.2
+  sleep 0.15
+}
+
+emu_channel_ok() {  # is the `adb emu` console channel alive?
+  local out
+  out=$(adb_dev emu avd name 2>&1 | head -2 | tr -d '\r')
+  case "$out" in
+    *erbium*|*OK*|*avd*) return 0 ;;
+    *) echo "emu-console: '$out'"; return 1 ;;
+  esac
 }
 
 # find node bounds center by text/content substring in a DUMP FILE, then

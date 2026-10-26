@@ -192,7 +192,18 @@ else
   shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
   sleep 6
   screenshot ogfn_launch
+  # touch-channel diagnostics — prove we can inject BEFORE looping forever
+  if emu_channel_ok; then ok "emu console channel alive"; else warn "emu console channel DEAD"; fi
+  # control experiment: tap the Discord↗ corner button — if the browser
+  # opens, touch injection works and the problem is the button itself
+  log "onb: control-tap on Discord↗ (proves touch works if browser opens)"
+  emu_tap 815 161; sleep 4
+  screenshot onb_control_tap
+  key_back 2>/dev/null; sleep 1
+  shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
+  sleep 3
 
+  DEVSAFE_SEEN=0
   ONB_T0=$(date +%s)   # NOTE: plain seconds — timer_start/timer_s are a
                        # millisecond pair; mixing them breaks arithmetic
   ONB_TIMEOUT=420   # the SettingUp extraction takes a while (node_modules!)
@@ -235,7 +246,34 @@ else
     #    while counting the button reads "PROCEED IN Xs"; plain "PROCEED"
     #    (no "IN") actually continues. ─────────────────────────────────
     if onb_screen_has "$XML" "JOIN DISCORD TO CONTINUE"; then
-      log "onb: DeveloperSafety — arming countdown (emu_tap)"
+      DEVSAFE_SEEN=$((DEVSAFE_SEEN + 1))
+      log "onb: DeveloperSafety — arming countdown (emu_tap, seen=${DEVSAFE_SEEN})"
+      if [ "$DEVSAFE_SEEN" = "6" ]; then
+        # escalation: instrumented-grade random touch — if THIS changes
+        # the screen, per-event injection is broken; if not, the app ignores
+        # everything (or the button needs a real long-press)
+        log "onb: escalating — monkey touch events"
+        shell_dev "monkey -p $OGFN_PKG --pct-touch 100 --throttle 300 6" >/dev/null 2>&1 || true
+        sleep 4
+      fi
+      if [ "$DEVSAFE_SEEN" = "12" ]; then
+        log "onb: escalation 2 — long-press via emu (hold 1.2s)"
+        adb_dev emu event send \
+          EV_KEY:BTN_TOUCH:1 EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:401 \
+          EV_ABS:ABS_MT_POSITION_X:540 EV_ABS:ABS_MT_POSITION_Y:1637 \
+          EV_ABS:ABS_MT_PRESSURE:50 EV_ABS:ABS_MT_TOUCH_MAJOR:10 \
+          EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
+        sleep 1.2
+        adb_dev emu event send \
+          EV_KEY:BTN_TOUCH:0 EV_ABS:ABS_MT_SLOT:0 EV_ABS:ABS_MT_TRACKING_ID:4294967295 \
+          EV_SYN:SYN_REPORT:0 >/dev/null 2>&1
+        sleep 3
+      fi
+      if [ "$DEVSAFE_SEEN" = "18" ]; then
+        log "onb: escalation 3 — input tap retry + keyevent ENTER"
+        shell_dev input tap 540 1637 || true; sleep 2
+        key_enter || true; sleep 2
+      fi
       ui_emu_tap_from_file "$XMLF" "JOIN DISCORD TO CONTINUE" || emu_tap 540 1637
       sleep 3; continue
     fi
