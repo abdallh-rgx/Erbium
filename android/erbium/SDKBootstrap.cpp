@@ -293,6 +293,30 @@ namespace SDK
     }
 
     // ─── version detection ───────────────────────────────────────────────────
+    // Android release strings are exactly:  "++Fortnite+Release-<FN>-CL-<CL>"
+    // (verified on 21.30: ONE ASCII copy + one UTF-16 copy; there is NO
+    // engine-first Windows-style build string in these binaries, so the
+    // engine version is derived from the Fortnite version table below —
+    // anchored on the 11 baked builds: 5.41→4.19, 7.40→4.20, 9.41→4.23,
+    // 13.40→4.26, 17.50→4.27, 18.40/19.10/21.30→5.0, 22.40→5.1, 23.50→5.3,
+    // 30.00→5.4).
+    static double EngineFromFortnite(double fn)
+    {
+        if (fn < 2.0)  return 4.18; // C1S1-2 "Cert" era
+        if (fn < 6.0)  return 4.19; // 5.41 ✓
+        if (fn < 8.0)  return 4.20; // 7.40 ✓
+        if (fn < 9.0)  return 4.21; // C1S8
+        if (fn < 11.0) return 4.23; // 9.41 ✓ 10.40 ✓
+        if (fn < 12.0) return 4.24; // C2S1
+        if (fn < 13.0) return 4.25; // C2S2
+        if (fn < 16.0) return 4.26; // 13.40 ✓ (14.x/15.x)
+        if (fn < 18.0) return 4.27; // 17.50 ✓ (16.x/17.x)
+        if (fn < 22.0) return 5.0;  // 18.40 ✓ 19.10 ✓ 21.30 ✓
+        if (fn < 23.0) return 5.1;  // 22.40 ✓
+        if (fn < 28.0) return 5.3;  // 23.50 ✓ (24.x-27.x)
+        return 5.4;                 // 30.00 ✓
+    }
+
     static bool DetectVersion()
     {
         // "++Fortnite+Release-XX.XX-CL-YYYYYYY" in module memory
@@ -300,55 +324,45 @@ namespace SDK
         if (!found)
             return false;
 
-        // parse EngineVersion-CL
+        // "<FN>-CL-<CL>" — the Fortnite version comes FIRST on Android.
         const char* p = found + 19;
-        double engine = 0;
-        int major = 0, minor = 0;
-        if (sscanf(p, "%d.%d", &major, &minor) == 2)
-            engine = major + minor / 10.0;
-        const char* cl = strstr(p, "-CL-");
-        if (!cl)
+        double fortnite = atof(p);
+        if (fortnite <= 0)
             return false;
-        unsigned long long clNum = strtoull(cl + 4, nullptr, 10);
 
-        // CL → Fortnite version (same mapping as Erbium's Windows Init)
-        double fortnite = 0;
-        if (clNum < 3901517)
+        const char* cl = strstr(p, "-CL-");
+        unsigned long long clNum = cl ? strtoull(cl + 4, nullptr, 10) : 0;
+
+        // these builds were just called "Cert" — CL → Fortnite version
+        // (same mapping as Erbium's Windows Init)
+        if (clNum && clNum < 3901517)
         {
+            double fnFromCL = 0;
             switch (clNum)
             {
-            case 3668626: fortnite = 1.64; break;
-            case 3681159: fortnite = 1.7; break;
-            case 3700114: fortnite = 1.72; break;
-            case 3724489: fortnite = 1.8; break;
-            case 3729133: fortnite = 1.81; break;
-            case 3741772: fortnite = 1.82; break;
-            case 3757339: fortnite = 1.9; break;
-            case 3775276: fortnite = 1.91; break;
-            case 3790078: fortnite = 1.10; break;
-            case 3807424: fortnite = 1.11; break;
-            case 3825894: fortnite = 2.1; break;
-            case 3841827: fortnite = 2.2; break;
-            case 3847564: fortnite = 2.3; break;
-            case 3858292: fortnite = 2.4; break;
-            case 3870737: fortnite = 2.42; break;
-            case 3889387: fortnite = 2.5; break;
-            default: fortnite = 0; break;
+            case 3668626: fnFromCL = 1.64; break;
+            case 3681159: fnFromCL = 1.7; break;
+            case 3700114: fnFromCL = 1.72; break;
+            case 3724489: fnFromCL = 1.8; break;
+            case 3729133: fnFromCL = 1.81; break;
+            case 3741772: fnFromCL = 1.82; break;
+            case 3757339: fnFromCL = 1.9; break;
+            case 3775276: fnFromCL = 1.91; break;
+            case 3790078: fnFromCL = 1.10; break;
+            case 3807424: fnFromCL = 1.11; break;
+            case 3825894: fnFromCL = 2.1; break;
+            case 3841827: fnFromCL = 2.2; break;
+            case 3847564: fnFromCL = 2.3; break;
+            case 3858292: fnFromCL = 2.4; break;
+            case 3870737: fnFromCL = 2.42; break;
+            case 3889387: fnFromCL = 2.5; break;
+            default: fnFromCL = 0; break;
             }
+            if (fnFromCL)
+                fortnite = fnFromCL;
         }
-        else
-        {
-            const char* v = strrchr(found, '-');
-            if (v)
-                fortnite = atof(v + 1);
-        }
-        if (!fortnite)
-            return false;
 
-        if (engine == 4.261) // 4.26.1 maps to 4.27
-            engine = 4.27;
-
-        VersionInfo.EngineVersion = engine;
+        VersionInfo.EngineVersion = EngineFromFortnite(fortnite);
         VersionInfo.FortniteVersion = fortnite;
         return true;
     }

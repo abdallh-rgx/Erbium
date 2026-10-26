@@ -4,11 +4,11 @@
 
 namespace Erbium::Baked {
 inline constexpr const char* kLibName = "libUnreal.so";
-inline constexpr const char* kRelease = "++Fortnite+Release-21.30-CL-0000000";
+inline constexpr const char* kRelease = "++Fortnite+Release-21.30-CL-21088273";
 inline constexpr uint64_t kGIsClient = 0xdc80824;
 inline constexpr uint64_t kGIsServer = 0xdc80832;
 inline constexpr uint64_t kGAllowCommandletRendering = 0xdc80830;
-inline constexpr uint64_t kReleaseString = 0x12c7b62;
+inline constexpr uint64_t kReleaseString = 0x1690506; // ASCII copy (0x12c7b62 is a UTF-16LE copy — probe reads '+' then NUL). Verified on the mtbr29 CL-21088273 APK (Build-ID 5b371871…, same binary as all mining).
 inline constexpr const char* kConsoleCommandSymbol = "Java_com_epicgames_unreal_GameActivity_nativeConsoleCommand";
 inline constexpr uint64_t kOwenProcessRequest = 0x89f02f0;
 inline constexpr uint64_t kOwenGetUrlField = 0x70;

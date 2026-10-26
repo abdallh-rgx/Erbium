@@ -17,6 +17,12 @@ struct FConfiguration
     static inline auto bKeepInventory = false;
     static inline auto Port = 7777;
     static inline auto bEnableIris = true;
+    // Listen-server mode (Android default): the local player is NEVER removed,
+    // GIsClient stays true and the world reports NM_ListenServer once a
+    // battle-royale terrain map is ticking — the host plays on the same screen
+    // the server listens on. Hosting is armed by the world watcher the moment
+    // the user travels (`open Artemis_Terrain`), NOT at boot.
+    static inline auto bListenServer = false;
 #ifdef __ANDROID__
     // Android: no ImGui/DX11 console, no SEH crash reporter (logcat tombstones),
     // no libcurl in the v1 port (webhook disabled).

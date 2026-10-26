@@ -306,6 +306,10 @@ void AFortGameMode::ReadyToStartMatch_(UObject* Context, FFrame& Stack, bool* Re
         setup = true;
 
         // if (!FindListenCall())
+        // Listen mode: the world watcher may already have brought the NetDriver
+        // up the moment the world switched to the terrain map — never create a
+        // second one (whichever path listens first wins, both arm the flag).
+        if (!Misc::bNetDriverListening)
         {
             auto World = UWorld::GetWorld();
             auto Engine = UEngine::GetEngine();
@@ -353,7 +357,10 @@ void AFortGameMode::ReadyToStartMatch_(UObject* Context, FFrame& Stack, bool* Re
             SetWorld(NetDriver, World);
             FString Err;
             if (InitListen(NetDriver, World, URL, false, Err))
+            {
                 SetWorld(NetDriver, World);
+                Misc::bNetDriverListening = true;
+            }
             else
                 printf("Failed to listen!");
 
@@ -1734,6 +1741,17 @@ void OnWorldInitDone(UNavigationSystem* NavSys, char Mode)
 
 void AFortGameMode::FinishWorldInitialization(AFortGameMode* _this, AActor* WorldManager)
 {
+    // Listen mode can re-enter the frontend (lobby) after hosting — the loot/
+    // vehicle/vending setup below is gameplay-only and assumes the map's BP
+    // classes are loaded. Skip it entirely for frontend worlds (same guard
+    // ReadyToStartMatch_ uses).
+    static auto FrontendMode = FindClass("FortGameModeFrontend");
+    if (FrontendMode && _this && _this->IsA(FrontendMode))
+    {
+        FinishWorldInitializationOG(_this, WorldManager);
+        return;
+    }
+
     auto GameMode = (AFortGameModeAthena*)_this;
     auto GameState = (AFortGameStateAthena*)GameMode->GameState;
 

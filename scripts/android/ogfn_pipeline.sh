@@ -281,6 +281,8 @@ verdict PASS "login + lobby reached (brightness=${LB:-?})"
 hr "phase 5 — GO (flip GIs* + open the map)"
 ms_wait_go $((T_LOGIN + 300)) || verdict FAIL "Erbium never armed the GO gate"
 
+# the automated pipeline drives the DEDICATED bring-up (listen is the default)
+shell_dev "echo dedicated > /data/local/tmp/erbium.mode" || true
 shell_dev "touch $GO_FILE" || die "cannot touch the GO file"
 ms_go_received 180 || verdict FAIL "GO signal not seen by Erbium"
 ok "GO received — Erbium is flipping GIs and opening the map"

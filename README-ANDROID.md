@@ -6,6 +6,41 @@ Fork of [plooshi/Erbium](https://github.com/plooshi/Erbium) being ported to run 
 
 ---
 
+## Listen Server mode (default) — the exact hosting flow
+
+The Android port defaults to a **LISTEN SERVER**: the local player is NEVER
+destroyed and the host plays on the same screen the server listens on.
+
+```
+boot ─► login ─► lobby ── (you are a 100% normal client) ──┐
+                                                           │ 4-finger console:
+                                                           │   open Artemis_Terrain
+                                                           ▼
+        WorldTick enters the terrain world ── world watcher (rides the
+        per-frame GetMaxTickRate hook, GAME THREAD) fires THAT tick:
+          • GetNetMode() → NM_ListenServer (2)
+          • GIsServer = true            (GIsClient stays true — listen host)
+          • NetDriver InitListen :7777  (LAN players join via Wi-Fi)
+          • WarmupRequiredPlayerCount = 1 (match starts with just the host)
+          • LocalPlayers KEPT           (no dedicated-style removal)
+```
+
+- **How hosting triggers**: type `open <Map>_Terrain` in the console
+  (`Artemis_Terrain` for 19.00–22.x, `Apollo_Terrain` for 11.00–18.x,
+  `Asteria_Terrain` 23.x, `Helios_Terrain` 28+). Hosting arms automatically
+  the moment WorldTick enters the map — nothing else to do.
+- **Leaving the map** (back to lobby) reports `NM_Standalone` again; opening a
+  terrain map again re-listens on the fresh world automatically.
+- **Opt out to the upstream dedicated behavior** (local player removed,
+  auto-open after the GO file — what the CI pipeline drives):
+
+  ```bash
+  adb shell "echo dedicated > /data/local/tmp/erbium.mode"
+  adb shell touch /data/local/tmp/erbium.go   # then the classic flip+open runs
+  ```
+
+---
+
 ## Architecture (Target)
 
 ```

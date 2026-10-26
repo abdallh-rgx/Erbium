@@ -129,7 +129,29 @@ namespace Erbium
     // (pure-server / CI-milestone mode). Otherwise we wait — logging a
     // heartbeat — until it appears (real-device flow: log in, reach the lobby,
     // then touch the file, or use the 4-finger console + open by hand).
+    //
+    // LISTEN mode (Android default): the gate is SKIPPED — the bootstrap only
+    // installs hooks (no flip, no map open, no local-player removal), so it
+    // runs as soon as the engine settles. The user logs in like a normal
+    // client and runs `open <Map>_Terrain` from the 4-finger console whenever
+    // ready; the world watcher (GetMaxTickRate hook) arms hosting at that
+    // moment.
     static const char* kGoFilePath = "/data/local/tmp/erbium.go";
+
+    static bool ErbiumListenMode()
+    {
+        // mirrors android/erbium/dllmain-android.cpp ResolveRunMode():
+        // listen is the Android default; "dedicated" in erbium.mode opts out.
+        if (FILE* f = fopen("/data/local/tmp/erbium.mode", "rb"))
+        {
+            char buf[64] = {0};
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            (void)n;
+            fclose(f);
+            return !strstr(buf, "dedicated");
+        }
+        return true;
+    }
 
     static bool GoFileExists()
     {
@@ -288,22 +310,27 @@ namespace Erbium
             return;
         }
 
-        // 3) Wait for the GO signal (login + lobby first!), then run the FULL
-        //    Erbium server bring-up: SDK::Init → Null/RetTrue patches → hooks →
-        //    GIsClient=false/GIsServer=true → LocalPlayers.Remove(0) → open the
-        //    terrain map. (v2: replaces the v1 minimal flip+open.)
-        if (!WaitForGoFile())
+        // 3) Wait for the GO signal (dedicated only), then run the FULL Erbium
+        //    bootstrap. Listen mode: bootstrap right away (hooks only).
+        if (ErbiumListenMode())
+        {
+            LOGI("listen mode: skipping the GO gate — bootstrap installs hooks "
+                 "only; hosting arms when you `open <Map>_Terrain`");
+        }
+        else if (!WaitForGoFile())
             return; // unreachable (waits forever) — keeps logic explicit
         const int delay = SettleDelaySeconds();
-        LOGI("GO received — settling %ds before server bring-up...", delay);
+        LOGI("engine ready — settling %ds before the Erbium bootstrap...", delay);
         std::this_thread::sleep_for(std::chrono::seconds(delay));
 
         LOGI("launching FULL Erbium server bootstrap (ErbiumAndroidMain)...");
         ErbiumAndroidMain();
 
-        // The full bootstrap handles: SDK init, patches, hooks, GIs flip,
-        // local-player removal, and the terrain open (via the game's own
-        // ExecuteConsoleCommand path from the SDK — same as Windows Erbium).
+        // DEDICATED mode: the bootstrap flips GIs, removes the local player and
+        // opens the terrain itself (gated on the GO file above).
+        // LISTEN mode: it only installs hooks — the world watcher inside the
+        // GetMaxTickRate hook arms hosting the moment the user's
+        // `open <Map>_Terrain` puts a terrain world into WorldTick.
         LOGI("Erbium full bootstrap dispatched — watch logcat tag:Erbium");
     }
 } // namespace Erbium

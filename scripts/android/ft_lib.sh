@@ -741,9 +741,14 @@ wait_redirect_quiescence() {
   done
 }
 
-# touch the GO file — Erbium sees it and flips + opens the map
+# touch the GO file — Erbium sees it and flips + opens the map.
+# The CI pipeline drives the DEDICATED bring-up (flip + LocalPlayers.Remove +
+# auto-open): select it explicitly so the listen-server default (which only
+# installs hooks and waits for a manual `open <Map>_Terrain`) stays out of the
+# way of the automated flip+open verification.
 go_signal() {
-  log "GO: touching $GO_FILE"
+  log "GO: selecting DEDICATED mode + touching $GO_FILE"
+  shell_dev "echo dedicated > /data/local/tmp/erbium.mode" || true
   shell_dev touch "$GO_FILE"
 }
 

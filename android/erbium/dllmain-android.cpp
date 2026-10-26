@@ -1,8 +1,20 @@
 // ============================================================================
 // dllmain-android.cpp — Erbium Main() for Android: the full server bring-up.
-// Port of Erbium/Erbium/Private/dllmain.cpp (Windows x64):
-//   SDK::Init → version-specific CVars → Null/RetTrue patches → hooks →
-//   GIsClient=false/GIsServer=true → LocalPlayers.Remove(0) → open terrain.
+// Port of Erbium/Erbium/Private/dllmain.cpp (Windows x64), PLUS the Android
+// listen-server mode:
+//
+//   LISTEN (default): no GIs flip, no LocalPlayers removal, no auto-open.
+//   The user stays a normal client in the lobby; the world watcher (riding
+//   the per-frame GetMaxTickRate hook, game thread) watches WorldTick and the
+//   MOMENT the world becomes a terrain map (`open Artemis_Terrain` via the
+//   4-finger console) hosting arms automatically: NM_ListenServer + NetDriver
+//   InitListen(:7777). The local player is NEVER destroyed — the host plays
+//   on the same screen the server listens on.
+//
+//   DEDICATED (opt-in via /data/local/tmp/erbium.mode = "dedicated"):
+//   upstream behavior — GIsClient=false/GIsServer=true → LocalPlayers.Remove(0)
+//   → auto-open the terrain map after the GO file.
+//
 // GUI/curl/console are compiled out on Android (logcat only).
 // ============================================================================
 #include "pch-android.h"
@@ -93,9 +105,32 @@ static void FindNullsAndRetTruesAndroid()
     }
 }
 
+// Erbium run mode. Default on Android: LISTEN SERVER — the local player is
+// never removed and hosting arms the moment WorldTick enters a terrain map.
+// Opt out to the upstream dedicated behavior with:
+//   adb shell "echo dedicated > /data/local/tmp/erbium.mode"
+static void ResolveRunMode()
+{
+    FConfiguration::bListenServer = true;
+    if (FILE* f = fopen("/data/local/tmp/erbium.mode", "rb"))
+    {
+        char buf[64] = {0};
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        (void)n;
+        fclose(f);
+        if (strstr(buf, "dedicated"))
+            FConfiguration::bListenServer = false;
+    }
+    LOGI("run mode: %s", FConfiguration::bListenServer
+        ? "LISTEN SERVER (local player kept; hosting arms when WorldTick enters a terrain map)"
+        : "DEDICATED (upstream: local player removed at GO, auto-open terrain)");
+}
+
 static void Main()
 {
     LOGI("=== Erbium Android server (build " __DATE__ " " __TIME__ ") ===");
+
+    ResolveRunMode();
 
     LOGI("Initializing SDK...");
     SDK::Init();
@@ -106,23 +141,48 @@ static void Main()
         return;
     }
 
-    // version-specific console commands (ported verbatim from dllmain.cpp)
-    if (VersionInfo.EngineVersion >= 5.0)
+    // In listen mode Main() runs at engine-up (before login) — wait for a
+    // live world before issuing console commands (the frontend world comes
+    // up as the game finishes booting; GetWorld() is null-safe until then).
+    if (FConfiguration::bListenServer)
     {
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogFortUIDirector None"), nullptr);
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogFortUIManager None"), nullptr);
+        for (int i = 0; i < 600 && !UWorld::GetWorld(); i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (auto W = UWorld::GetWorld())
+        {
+            UEAllocatedString WName = W->Name.ToString();
+            LOGI("listen mode: world is live ('%s') — installing hooks", WName.c_str());
+        }
+        else
+            LOGW("listen mode: no world after 60s — installing hooks anyway");
     }
-    if (VersionInfo.FortniteVersion == 20.40)
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogSpecialRelevancyHealthComponent None"), nullptr);
-    if (VersionInfo.EngineVersion >= 5.1)
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"net.AllowEncryption 0"), nullptr);
-    if (VersionInfo.EngineVersion >= 5.3 && FConfiguration::bEnableIris)
+
+    // version-specific console commands (ported verbatim from dllmain.cpp).
+    // ExecuteConsoleCommand needs a live world as its context object — skip
+    // the (pure log-level tweaks) if no world is up yet rather than risk a
+    // null-context crash.
+    if (auto WorldForCmds = UWorld::GetWorld())
     {
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogIris None"), nullptr);
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogIrisRpc None"), nullptr);
-        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogIrisBridge None"), nullptr);
+        (void)WorldForCmds;
+        if (VersionInfo.EngineVersion >= 5.0)
+        {
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogFortUIDirector None"), nullptr);
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogFortUIManager None"), nullptr);
+        }
+        if (VersionInfo.FortniteVersion == 20.40)
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogSpecialRelevancyHealthComponent None"), nullptr);
+        if (VersionInfo.EngineVersion >= 5.1)
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"net.AllowEncryption 0"), nullptr);
+        if (VersionInfo.EngineVersion >= 5.3 && FConfiguration::bEnableIris)
+        {
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogIris None"), nullptr);
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogIrisRpc None"), nullptr);
+            UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogIrisBridge None"), nullptr);
+        }
+        UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogSpecialEventScript VeryVerbose"), nullptr);
     }
-    UKismetSystemLibrary::ExecuteConsoleCommand(UWorld::GetWorld(), FString(L"log LogSpecialEventScript VeryVerbose"), nullptr);
+    else
+        LOGW("no world yet — skipping the log-level console commands");
 
 #ifdef CLIENT
     Misc::InitClient();
@@ -152,7 +212,39 @@ static void Main()
     for (auto& HookFunc : _HookFuncs)
         HookFunc();
 
-    // flip client/server flags — the Erbium core trick
+    // matchmaking/encryption bypass (x64: JG→JE) — applies in BOTH modes
+    // (21.30 is UE5.0: the `net.AllowEncryption 0` console command needs
+    // EngineVersion >= 5.1, so this byte patch is the only mechanism there).
+    if (uint64_t EncryptionPatch = FindEncryptionPatch())
+    {
+        if (!AndroidPatches::ApplyEncryptionPatch(EncryptionPatch))
+            LOGW("Matchmaking patch NOT applied on this version (pattern found but no b.gt)");
+    }
+    else
+        LOGW("Matchmaking is NOT supported on this version (no anchor)");
+
+    // flip client/server flags — the Erbium core trick (DEDICATED ONLY).
+    // Listen mode: GIsClient stays true FOREVER and GIsServer flips inside
+    // Misc::ArmListenHosting() when WorldTick enters the terrain map — never
+    // here, never at boot, so the frontend/login stays 100% vanilla.
+    if (FConfiguration::bListenServer)
+    {
+        srand((uint32_t)time(0));
+
+        for (auto& HookFunc : _PostLoadHookFuncs)
+            HookFunc();
+
+        Misc::bHookedAll = true;
+        LOGI("Erbium LISTEN mode READY:");
+        LOGI("  1. log in and reach the lobby (you are a normal client)");
+        LOGI("  2. open the console (4-finger tap) and run: open <Map>_Terrain");
+        LOGI("  3. the world watcher arms hosting the tick the terrain goes live");
+        LOGI("     (NM_ListenServer + NetDriver listening on port %d — local player KEPT)",
+             (int)FConfiguration::Port);
+        return;
+    }
+
+    // ── dedicated path (upstream behavior) ──────────────────────────────
     uint64_t gisClient = FindGIsClient();
     uint64_t gisServer = FindGIsServer();
     if (gisClient && gisServer)
@@ -199,15 +291,6 @@ static void Main()
         else if (VersionInfo.FortniteVersion >= 11.00)
             terrainOpen = L"open Apollo_Terrain";
     }
-
-    // matchmaking/encryption bypass (x64: JG→JE)
-    if (uint64_t EncryptionPatch = FindEncryptionPatch())
-    {
-        if (!AndroidPatches::ApplyEncryptionPatch(EncryptionPatch))
-            LOGW("Matchmaking patch NOT applied on this version (pattern found but no b.gt)");
-    }
-    else
-        LOGW("Matchmaking is NOT supported on this version (no anchor)");
 
     for (auto& HookFunc : _PostLoadHookFuncs)
         HookFunc();

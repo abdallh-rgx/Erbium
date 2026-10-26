@@ -8,10 +8,29 @@
 #include "../Public/Configuration.h"
 #include "../Public/Finders.h"
 #include <algorithm>
+#include <chrono>
+#include <thread>
+
+// listen-mode world watcher (defined below — rides the GetMaxTickRate hook)
+static void ListenServerWatcherTick();
 
 int Misc::GetNetMode()
 {
-    return 1;
+    // Listen mode: the lobby/frontend reports NM_Standalone (0) — exactly what
+    // a vanilla client reports (no gameplay NetDriver in the lobby), so the
+    // frontend is untouched. The instant the world watcher arms hosting on a
+    // terrain map, everything (GameMode, pawns, replication) sees
+    // NM_ListenServer (2): authority + a live local player on the same screen.
+    // Leaving the hosted world (back to lobby) reports NM_Standalone again.
+    if (FConfiguration::bListenServer)
+    {
+        if (!bHostingActive || !HostedWorld)
+            return 0; // NM_Standalone — vanilla lobby behavior
+
+        return UWorld::GetWorld() == (UWorld*)HostedWorld ? 2 : 0;
+    }
+
+    return 1; // NM_DedicatedServer (upstream dedicated-server behavior)
 }
 
 void* Misc::SendRequestNow(void* Arg1, void* MCPData, int)
@@ -24,6 +43,11 @@ void* Misc::SendRequestNow(void* Arg1, void* MCPData, int)
 
 float Misc::GetMaxTickRate(UEngine* Engine, float DeltaTime, bool bAllowFrameRateSmoothing)
 {
+    // Per-frame game-thread entry — the listen-mode world watcher rides this
+    // hook (fires every WorldTick, so hosting arms the tick the terrain world
+    // goes live; one pointer compare when idle).
+    ListenServerWatcherTick();
+
     // improper, DS is supposed to do hitching differently
     return (float)FConfiguration::MaxTickRate;
     // return std::clamp(1.f / DeltaTime, 1.f, FConfiguration::MaxTickRate);
@@ -326,13 +350,18 @@ void Ohio(ABuildingProp_LockDevice* _this, AFortPlayerControllerAthena* Controll
 
 bool Listen()
 {
+    // Listen servers only listen once — the world watcher and
+    // ReadyToStartMatch_ race for this; whoever wins arms the flag.
+    if (Misc::bNetDriverListening)
+        return true;
+
     printf("UWorld::Listen\n");
     auto World = UWorld::GetWorld();
     auto Engine = UEngine::GetEngine();
     auto NetDriverName = FName(L"GameNetDriver");
     auto GameMode = (AFortGameModeAthena*)World->AuthorityGameMode;
 
-    if (GameMode->HasbEnableReplicationGraph())
+    if (GameMode && GameMode->HasbEnableReplicationGraph())
         GameMode->bEnableReplicationGraph = true;
 
     UNetDriver* NetDriver = nullptr;
@@ -389,7 +418,109 @@ bool Listen()
 
     free(URL);
 
+    Misc::bNetDriverListening = true;
+
     return true;
+}
+
+bool Misc::ArmListenHosting()
+{
+    // The exact requested mechanism: the user typed `open <Terrain>` and
+    // WorldTick is now ticking the terrain world — hosting starts HERE, on
+    // the game thread. The local player is NOT destroyed: GIsClient stays
+    // true and LocalPlayers stays populated — this is a LISTEN server (the
+    // host plays on the same screen the server listens on).
+    bHostingActive = true; // GetNetMode() → NM_ListenServer from this instant
+
+    if (uint64_t GIsServerAddr = FindGIsServer())
+        *(bool*)GIsServerAddr = true;
+
+    auto World = UWorld::GetWorld();
+    if (!World)
+        return false;
+
+    HostedWorld = World;
+
+    // (re)listen when this world has no driver yet — first host, or a re-host
+    // after returning to the lobby and opening a terrain map again.
+    bool bListened = (bNetDriverListening && World->NetDriver) ? true : Listen();
+
+    if (World->AuthorityGameMode)
+    {
+        auto GameMode = (AFortGameMode*)World->AuthorityGameMode;
+
+        // the match can start with just the host
+        if (GameMode->HasWarmupRequiredPlayerCount())
+            GameMode->WarmupRequiredPlayerCount = 1;
+    }
+
+    return bListened;
+}
+
+// ── listen-mode world watcher ─────────────────────────────────────────────
+// The exact requested mechanism: the user types `open Artemis_Terrain` (via
+// the 4-finger console or any console), WorldTick travels to the terrain map,
+// and this watcher — riding the per-frame GetMaxTickRate hook on the GAME
+// THREAD — arms hosting at that moment. Zero polling threads, zero races.
+static bool IsTerrainWorldName(const char* name)
+{
+    if (!name || !*name)
+        return false;
+    size_t len = strlen(name);
+    if (strcmp(name, "Mole_UnderBase_Parent") == 0)
+        return true; // Mole playlist map (no _Terrain suffix)
+    if (len >= 8 && strcmp(name + len - 8, "_Terrain") == 0)
+        return true; // Athena / Apollo / Artemis / Asteria / Helios / Creative
+    return false;
+}
+
+static void ListenServerWatcherTick()
+{
+    if (!FConfiguration::bListenServer)
+        return;
+
+    // Fast path: one pointer compare per frame — the world only changes on
+    // travel. The name is resolved (one allocation) only on a NEW world.
+    static void* LastCheckedWorld = nullptr;
+
+    auto World = UWorld::GetWorld();
+    if (!World || World == LastCheckedWorld)
+        return;
+
+    LastCheckedWorld = World;
+
+    UEAllocatedString WorldName = World->Name.ToString();
+    if (!IsTerrainWorldName(WorldName.c_str()))
+        return; // frontend / lobby / boot world — stay vanilla
+
+    if (World == Misc::HostedWorld)
+        return; // already hosting this exact world
+
+    if (Misc::HostedWorld)
+    {
+        // re-host on a fresh terrain world: the old NetDriver is bound to the
+        // dead world — drop the flag so Listen() runs again for this one.
+        Misc::bNetDriverListening = false;
+        printf("[Listen] new terrain world — re-hosting\n");
+    }
+
+    // The GameMode may still be constructing mid-travel — retry on the next
+    // tick rather than blocking the game thread (Listen() needs it for the
+    // replication-graph check).
+    if (!World->AuthorityGameMode)
+    {
+        LastCheckedWorld = nullptr; // force re-evaluation next frame
+        return;
+    }
+
+    printf("[Listen] WorldTick entered '%s' — arming listen hosting on port %d\n",
+           WorldName.c_str(), (int)FConfiguration::Port);
+
+    const bool ok = Misc::ArmListenHosting();
+
+    printf("[Listen] hosting %s — NetDriver %s, local player KEPT (listen server)\n",
+           ok ? "ACTIVE" : "FAILED",
+           Misc::bNetDriverListening ? "listening" : "down");
 }
 
 struct FFortBotCosmeticItemSetDataTableRow
