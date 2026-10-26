@@ -539,7 +539,9 @@ shot_looks_ingame() {
   read -r b c <<< "$(img_stats "$f")"
   log "shot $(basename "$f"): brightness=${b} colorfulness=${c}"
   [ "${b:-0}" = "-1" ] && { warn "image analysis unavailable (no PIL)"; return 0; }
-  [ "${b%.*}" -ge 8 ] && [ "${b%.*}" -le 250 ] && [ "${c%.*}" -ge 6 ]
+  # 15..215 brightness: a real rendered 3D scene has mid tones — pure black
+  # (loading) AND pure white (blank/loader overlay) both fail.
+  [ "${b%.*}" -ge 15 ] && [ "${b%.*}" -le 215 ] && [ "${c%.*}" -ge 6 ]
 }
 
 # ─────────────────────────── uiautomator (browser etc.) ────────────────────
