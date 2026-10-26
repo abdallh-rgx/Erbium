@@ -11,7 +11,7 @@ namespace ErbiumBaked {
     inline constexpr uint64_t kGObjects = 0x12b8ecb0;
     inline constexpr uint64_t kProcessEvent = 0xbd02264;
     inline constexpr uint64_t kRealloc = 0xba96110;
-    inline constexpr uint64_t kReleaseString = 0;
+    inline constexpr uint64_t kReleaseString = 0x41cc104; // ASCII release string (verified on the OGFN 1340Fortnite.apk binary)
     inline constexpr uint64_t kSpawnActor = 0xc07e6b8;
     inline constexpr uint64_t kStaticFindObject = 0xbcf2d1c;
     inline constexpr uint64_t kStaticLoadObject = 0xbd075c4;

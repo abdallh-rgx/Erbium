@@ -4,11 +4,11 @@
 
 namespace Erbium::Baked {
 inline constexpr const char* kLibName = "libUE4.so";
-inline constexpr const char* kRelease = "++Fortnite+Release-13.40-CL-0000000";
+inline constexpr const char* kRelease = "++Fortnite+Release-13.40-CL-14043030";
 inline constexpr uint64_t kGIsClient = 0x12aefe30;
 inline constexpr uint64_t kGIsServer = 0x12811dc4;
 inline constexpr uint64_t kGAllowCommandletRendering = 0;
-inline constexpr uint64_t kReleaseString = 0;
+inline constexpr uint64_t kReleaseString = 0x41cc104; // ASCII release string (verified on the OGFN 1340Fortnite.apk binary)
 inline constexpr const char* kConsoleCommandSymbol = "Java_com_epicgames_unreal_GameActivity_nativeConsoleCommand";
 inline constexpr uint64_t kOwenProcessRequest = 0;
 inline constexpr uint64_t kOwenGetUrlField = 0;

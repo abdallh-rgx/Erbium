@@ -1,0 +1,363 @@
+name: android-remote
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  android-remote — YOUR phone as the controller of a real Android emulator
+#  on a GitHub Actions runner.
+#
+#  What you get (from any browser, no computer):
+#    • 🖥 noVNC: the emulator's screen, clickable + typable
+#       http://<runner-tailscale-ip>:6080/vnc.html
+#    • 📱 Control panel: big buttons (Console 4-touch, AUTHORIZE LOGIN,
+#      GO, tap, text, adb, logcat, state)
+#       http://<runner-tailscale-ip>:8081
+#    • 🔌 SSH terminal (Termux): ssh <line printed in the job log>
+#    • Preinstalled: patched Fortnite (liberbium inside) + host LawinServer
+#      on :8080/:3001 + adb reverse (device loopback → host backend) +
+#      injected content manifest (the game can run its REAL internal update
+#      from Epic's akamaized CDN)
+#
+#  Requirements (once):
+#    1. Tailscale app on your phone (free): https://tailscale.com
+#    2. Sign up → admin console → Settings → Keys → Generate auth key
+#       (ephemeral, tags not needed)
+#    3. Add it as the repository secret  TAILSCALE_AUTHKEY
+#       (https://github.com/abdallh-rgx/Erbium/settings/secrets/actions)
+#
+#  Space: free runners give ~75 GB on /mnt (+ ~30 GB on /). 150 GB needs a
+#  paid "larger runner". One version's internal content (~15-25 GB) fits
+#  comfortably — the AVD data partition below is 55 GB.
+# ═══════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_level:
+        description: 'Android API (29 = Android 10; auto-falls back to 30 if no ARM translation)'
+        required: false
+        default: '29'
+      game_asset:
+        description: 'Release asset to auto-install (fortnite-1340-erbium-signed.apk / fortnite-1840-erbium-signed.apk / none)'
+        required: false
+        default: 'fortnite-1340-erbium-signed.apk'
+      start_backend:
+        description: 'Start host LawinServer + adb reverse + manifest (true/false)'
+        required: false
+        default: 'true'
+      keep_alive_minutes:
+        description: 'Minutes to stay alive after setup (max ~340)'
+        required: false
+        default: '240'
+
+permissions:
+  contents: read
+
+jobs:
+  remote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      ANDROID_AVD_HOME: /mnt/avd
+      PATH: /home/runner/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling (scrcpy + VNC stack + node)
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openjdk-17-jdk-headless unzip wget curl \
+            adb scrcpy xvfb x11vnc novnc websockify python3-pil nodejs tmate
+
+      - name: Install Android SDK + emulator
+        run: |
+          set -e
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Create AVD (data partition on the big /mnt disk)
+        run: |
+          set -e
+          sudo mkdir -p /mnt/avd && sudo chown -R "$USER" /mnt/avd
+          df -h / /mnt | true
+          API="${{ github.event.inputs.api_level }}"
+          echo "REQUESTED_API=$API" >> "$GITHUB_ENV"
+          make_avd() {
+            local api=$1 flavor=$2
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+              "platform-tools" "emulator" "system-images;android-${api};${flavor};x86_64" > /dev/null 2>&1 || return 1
+            rm -rf /mnt/avd/*
+            local AVD_DIR="/mnt/avd/erbium.avd"
+            mkdir -p "$AVD_DIR"
+            cat > "$AVD_DIR/config.ini" <<EOF
+          avd.id=erbium
+          avd.name=erbium
+          avd.ini.encoding=UTF-8
+          Abi.type=x86_64
+          AvdId=erbium
+          Tag=${flavor}
+          Tag.display=${flavor}
+          image.sysdir.1=system-images/android-${api}/${flavor}/x86_64/
+          hw.device.name=pixel_4
+          hw.device.manufacturer=Google
+          hw.cpu.arch=x86_64
+          hw.cpu.ncore=4
+          hw.ramSize=6144
+          vm.heapSize=512
+          disk.dataPartition.size=55G
+          hw.lcd.density=440
+          hw.lcd.width=1080
+          hw.lcd.height=2280
+          hw.keyboard=yes
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          fastboot.forceColdBoot=yes
+          EOF
+            cat > /mnt/avd/erbium.ini <<EOF
+          avd.ini.encoding=UTF-8
+          path=$AVD_DIR
+          path.rel=avd/erbium.avd
+          EOF
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -q erbium
+          echo "IMAGE_FLAVOR=${flavor}" >> "$GITHUB_ENV"
+            echo "API_LEVEL=${api}" >> "$GITHUB_ENV"
+          }
+          # try the requested level first, fall back to API 30 (proven ARM
+          # translation) if its image lacks arm64 in abilist
+          if ! make_avd "$API" google_apis; then
+            echo "API $API image unavailable — falling back to API 30"
+            make_avd 30 google_apis
+          fi
+
+      - name: Boot emulator (API 29 → auto-fallback to 30 if no ARM translation)
+        run: |
+          set -e
+          boot_and_check() {
+            sudo chmod 666 /dev/kvm || true
+            adb start-server 2>/dev/null || true
+            adb emu kill >/dev/null 2>&1 || pkill -f qemu-system >/dev/null 2>&1 || true
+            sleep 4
+            nohup "$ANDROID_HOME/emulator/emulator" -avd erbium \
+              -no-window -no-audio -no-boot-anim -no-snapshot \
+              -gpu swiftshader_indirect -memory 6144 -cores 4 \
+              -timezone Asia/Baghdad > /tmp/emulator.log 2>&1 &
+            EMU_PID=$!
+            for i in $(seq 1 60); do
+              kill -0 $EMU_PID 2>/dev/null || { tail -30 /tmp/emulator.log; return 2; }
+              adb devices 2>/dev/null | grep -qE "emulator-[0-9]+[[:space:]]+device" && break
+              sleep 5
+            done
+            timeout 900 adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 5; done' \
+              || { tail -50 /tmp/emulator.log; return 2; }
+            local ABILIST=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')
+            echo "── booted: Android $(adb shell getprop ro.build.version.release) | abilist: $ABILIST"
+            case "$ABILIST" in
+              *arm64-v8a*) return 0 ;;
+              *) echo "⚠ this image has NO arm64 translation"; return 1 ;;
+            esac
+          }
+          recreate_avd_api30() {
+            echo "── recreating the AVD with API 30 (Android 11, proven ARM translation)"
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "system-images;android-30;google_apis;x86_64" > /dev/null
+            rm -rf /mnt/avd/*
+            mkdir -p /mnt/avd/erbium.avd
+            cat > /mnt/avd/erbium.avd/config.ini <<EOF
+          avd.id=erbium
+          avd.name=erbium
+          avd.ini.encoding=UTF-8
+          Abi.type=x86_64
+          AvdId=erbium
+          Tag=google_apis
+          Tag.display=google_apis
+          image.sysdir.1=system-images/android-30/google_apis/x86_64/
+          hw.device.name=pixel_4
+          hw.device.manufacturer=Google
+          hw.cpu.arch=x86_64
+          hw.cpu.ncore=4
+          hw.ramSize=6144
+          vm.heapSize=512
+          disk.dataPartition.size=55G
+          hw.lcd.density=440
+          hw.lcd.width=1080
+          hw.lcd.height=2280
+          hw.keyboard=yes
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          fastboot.forceColdBoot=yes
+          EOF
+            cat > /mnt/avd/erbium.ini <<EOF
+          avd.ini.encoding=UTF-8
+          path=/mnt/avd/erbium.avd
+          path.rel=avd/erbium.avd
+          EOF
+            echo "API_LEVEL=30" >> "$GITHUB_ENV"
+          }
+          if ! boot_and_check; then
+            rc=$?
+            [ "$rc" = "2" ] && { echo "emulator died outright"; exit 1; }
+            recreate_avd_api30
+            boot_and_check || { echo "API-30 boot failed too"; exit 1; }
+          fi
+          echo "ARM64 translation OK ✓ — emulator ready"
+
+      # ── bring the screen to your phone ─────────────────────────────────────
+      - name: Start VNC-in-browser (noVNC + scrcpy)
+        run: |
+          set -e
+          # scrcpy renders the emulator into a virtual X display; x11vnc
+          # publishes it; websockify/noVNC gives it to your phone browser.
+          # Mouse + keyboard through noVNC → scrcpy → device input.
+          Xvfb :99 -screen 0 1080x2280x24 &
+          sleep 2
+          DISPLAY=:99 nohup scrcpy -s emulator-5554 --max-size 1080 --window-title erbium \
+            --stay-awake > /tmp/scrcpy.log 2>&1 &
+          sleep 3
+          nohup x11vnc -display :99 -forever -shared -nopw -quiet > /tmp/x11vnc.log 2>&1 &
+          sleep 1
+          nohup websockify --web=/usr/share/novnc 6080 localhost:5900 > /tmp/websockify.log 2>&1 &
+          sleep 2
+          curl -s -o /dev/null http://127.0.0.1:6080/vnc.html && echo "noVNC up ✓"
+
+      - name: Start the control panel
+        run: |
+          set -e
+          PANEL_PORT=8081 nohup python3 scripts/android/panel.py > /tmp/panel.log 2>&1 &
+          sleep 2
+          curl -s -o /dev/null http://127.0.0.1:8081/ && echo "panel up ✓"
+
+      # ── optional: preinstall the game + backend so you land ready ──────────
+      - name: Fetch + install the patched game
+        if: ${{ github.event.inputs.game_asset != 'none' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p artifacts
+          gh release download ogfn-assets --pattern "${{ github.event.inputs.game_asset }}" \
+            --output artifacts/game.apk --repo "$GITHUB_REPOSITORY" || { echo "asset not on release — skipping game install"; exit 0; }
+          adb install -r -t artifacts/game.apk | tail -1
+          # battery optimization exemptions (background survival)
+          PKG=$(python3 - <<'PY'
+          import re, zipfile
+          data = zipfile.ZipFile('artifacts/game.apk').read('AndroidManifest.xml')
+          m = re.search(rb'c\x00o\x00m\x00\.\x00e\x00p\x00i\x00c\x00g\x00a\x00m\x00e\x00s\x00'
+                        rb'\.\x00f\x00o\x00r\x00t\x00n\x00i\x00t\x00[\x00-\xff]{2,40}', data)
+          print(m.group(0).decode('utf-16-le','ignore').split('\x00')[0] if m else 'com.epicgames.fortnite')
+          PY
+          )
+          echo "GAME_PKG=$PKG" >> "$GITHUB_ENV"
+          adb shell "dumpsys deviceidle whitelist +$PKG" || true
+          adb shell "dumpsys deviceidle whitelist +com.dhyper.ogfnmanager" || true
+          echo "game installed: $PKG"
+
+      - name: Host LawinServer + adb reverse + content manifest
+        if: ${{ github.event.inputs.start_backend == 'true' }}
+        run: |
+          set -e
+          # node can't run inside the emulator (V8 JIT + ndk_translation =
+          # SIGILL, proven run14) — run LawinServer with the runner's node
+          # and tunnel the device loopback to it.
+          if [ ! -d artifacts/lawin ]; then
+            # any OGFN apk carries the server as assets; fall back to the
+            # release asset we definitely have
+            gh release download ogfn-assets --pattern "ogfn-erbium-signed.apk" \
+              --output artifacts/ogfn.apk --repo "$GITHUB_REPOSITORY" \
+              || gh release download ogfn-assets --pattern "ogfn-by-dhyper.apk" \
+                --output artifacts/ogfn.apk --repo "$GITHUB_REPOSITORY"
+            unzip -o -q artifacts/ogfn.apk "assets/LawinServer-main/*" -d artifacts/ls
+            mv artifacts/ls/assets/LawinServer-main artifacts/lawin
+          fi
+          # content manifest — the game's REAL internal update (akamaized CDN)
+          if [ -f artifacts/game.apk ]; then
+            python3 scripts/android/make_manifest.py artifacts/game.apk artifacts/lawin || true
+          fi
+          PORT=8080 nohup node artifacts/lawin/index.js > /tmp/lawin.log 2>&1 &
+          echo "LAWIN_PID=$!" >> /tmp/lawin_pid
+          sleep 4
+          curl -s -o /dev/null http://127.0.0.1:8080/ ; code=$?
+          echo "LawinServer HTTP probe rc=$code (any HTTP answer is fine)"
+          adb reverse tcp:8080 tcp:8080
+          adb reverse tcp:3001 tcp:3001
+          adb shell "printf 'http://127.0.0.1:8080' > /data/local/tmp/erbium.backend" || true
+          adb shell "rm -f /data/local/tmp/erbium.go" || true
+          echo "backend + reverse tunnel + GO gate ready ✓"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── your access: Tailscale (browser) + tmate (SSH) ─────────────────────
+      - name: Tailscale up (browser + direct-IP access)
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh || true
+          sudo tailscaled --state=/tmp/tailscaled.state --socket=/tmp/tailscaled.sock &
+          sleep 3
+          if [ -n "$TS_AUTHKEY" ]; then
+            sudo tailscale --socket=/tmp/tailscaled.sock up \
+              --authkey="$TS_AUTHKEY" \
+              --hostname="erbium-remote-${{ github.run_id }}" \
+              --accept-routes || echo "tailscale up failed"
+            IP=$(sudo tailscale --socket=/tmp/tailscaled.sock ip -4 || echo '')
+            echo "TS_IP=$IP" >> "$GITHUB_ENV"
+            echo "══════════════════════════════════════════════════"
+            echo "  📱 FROM YOUR PHONE (Tailscale app ON):"
+            echo "  🖥 screen + touch:  http://$IP:6080/vnc.html"
+            echo "  🎛 control panel:   http://$IP:8081"
+            echo "══════════════════════════════════════════════════"
+          else
+            echo "no TAILSCALE_AUTHKEY secret — browser access disabled; use the tmate SSH line below"
+          fi
+
+      - name: tmate SSH (terminal from Termux — always on)
+        run: |
+          # tmate gives an SSH line WITHOUT any account — paste into Termux
+          tmate -S /tmp/tmate.sock -f /dev/null new-session -d \
+            -t "erbium-remote" 2>/dev/null || tmate new-session -d
+          sleep 5
+          SSH_LINE=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null || tmate display -p '#{tmate_ssh}')
+          WEB_LINE=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}' 2>/dev/null || true)
+          {
+            echo "══════════════════════════════════════════════════"
+            echo "  🔌 SSH FROM TERMUX (no account needed):"
+            echo "     $SSH_LINE"
+            [ -n "$WEB_LINE" ] && echo "  🌐 (or paste in a browser: $WEB_LINE)"
+            echo "══════════════════════════════════════════════════"
+            echo "  then inside the session you have adb, scrcpy, node."
+            echo "  panel:  PANEL_PORT=8081 python3 scripts/android/panel.py"
+            echo "══════════════════════════════════════════════════"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Stay alive while you work
+        run: |
+          MINS=${{ github.event.inputs.keep_alive_minutes }}
+          echo "runner alive for $MINS minutes — go!"
+          # heartbeat: keep the ports warm + a rolling screenshot so you can
+          # see the state in the artifacts even mid-session
+          T0=$(date +%s)
+          while [ $(( ($(date +%s) - T0) / 60 )) -lt "$MINS" ]; do
+            sleep 300
+            adb shell screencap -p /sdcard/hb.png 2>/dev/null && adb pull /sdcard/hb.png /tmp/hb_$(date +%H%M).png 2>/dev/null || true
+            kill -0 $(cat /tmp/lawin_pid 2>/dev/null) 2>/dev/null || {
+              # lawin died? restart it quietly
+              [ -d artifacts/lawin ] && PORT=8080 nohup node artifacts/lawin/index.js > /tmp/lawin.log 2>&1 & echo $! > /tmp/lawin_pid
+              adb reverse tcp:8080 tcp:8080 || true
+              adb reverse tcp:3001 tcp:3001 || true
+            } || true
+          done
+
+      - name: Upload session artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-session-${{ github.run_id }}
+          path: |
+            /tmp/emulator.log
+            /tmp/lawin.log
+            /tmp/panel.log
+            /tmp/hb_*.png
+          if-no-files-found: warn
