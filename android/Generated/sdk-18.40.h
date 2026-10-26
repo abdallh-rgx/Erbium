@@ -11,7 +11,7 @@ namespace ErbiumBaked {
     inline constexpr uint64_t kGObjects = 0x115d8ed0;
     inline constexpr uint64_t kProcessEvent = 0xad776e0;
     inline constexpr uint64_t kRealloc = 0xad23778;
-    inline constexpr uint64_t kReleaseString = 0x47842ba;
+    inline constexpr uint64_t kReleaseString = 0x4b05c5f;
     inline constexpr uint64_t kSpawnActor = 0xaa632bc;
     inline constexpr uint64_t kStaticFindObject = 0xad7100c;
     inline constexpr uint64_t kStaticLoadObject = 0xa95f4d4;
