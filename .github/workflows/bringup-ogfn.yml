@@ -1,0 +1,213 @@
+name: ogfn-bringup
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  OGFN closed-loop bring-up:
+#    emulator (KVM + ndk_translation) → OGFN Manager (LawinServer on-device)
+#    → patched Fortnite 18.40 (liberbium.so inside) → login → lobby → GO
+#    → Erbium listen-server on UDP :7777 → in-match screenshot of the player.
+#
+#  The patched game APK + OGFN manager live on the `ogfn-assets` release of
+#  this repo (uploaded once by the maintainers):
+#     ogfn-by-dhyper.apk          — OGFN Manager (DHyper)
+#     fortnite-1840-erbium-signed.apk — 18.40 + loadLibrary(erbium) +
+#                                       4-finger console + liberbium.so
+# ═══════════════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      ogfn_apk_url:
+        description: 'OGFN Manager APK URL (empty = release asset)'
+        required: false
+        default: ''
+      game_apk_url:
+        description: 'Patched Fortnite APK URL (empty = release asset)'
+        required: false
+        default: ''
+      version:
+        description: 'Version label (for artifacts)'
+        required: false
+        default: '18.40-OGFN'
+      quick:
+        description: 'Quick mode (shorter timeouts)'
+        required: false
+        default: 'false'
+      keep_alive:
+        description: 'Minutes to keep the runner alive after the test (0 = off)'
+        required: false
+        default: '0'
+  schedule:
+    # unattended overnight run — 02:17 UTC every night (rare-minute to avoid
+    # the top-of-hour workflow crunch)
+    - cron: '17 2 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      API_LEVEL: '30'          # x86_64 image w/ ndk_translation (runs arm64)
+      IMAGE_FLAVOR: google_apis  # allows adb root → no Shizuku needed
+      ANDROID_AVD_HOME: /home/runner/.android/avd
+      PATH: /home/runner/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install base tooling
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openjdk-17-jdk-headless unzip wget curl \
+            python3-pip adb udev python3-pil tar
+          python3 -m pip install --quiet pillow
+
+      # ── Android SDK + emulator (x86_64 image with arm translation) ────────
+      - name: Install Android SDK + emulator
+        run: |
+          set -e
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" \
+            "system-images;android-30;${IMAGE_FLAVOR};x86_64" > /dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Create AVD
+        run: |
+          set -e
+          AVD_DIR="$ANDROID_AVD_HOME/erbium.avd"
+          mkdir -p "$AVD_DIR" "$ANDROID_AVD_HOME"
+          cat > "$AVD_DIR/config.ini" <<EOF
+          avd.id=erbium
+          avd.name=erbium
+          avd.ini.encoding=UTF-8
+          Abi.type=x86_64
+          AvdId=erbium
+          Tag=${IMAGE_FLAVOR}
+          Tag.display=${IMAGE_FLAVOR}
+          image.sysdir.1=system-images/android-30/${IMAGE_FLAVOR}/x86_64/
+          hw.device.name=pixel_4
+          hw.device.manufacturer=Google
+          hw.cpu.arch=x86_64
+          hw.cpu.ncore=4
+          hw.ramSize=6144
+          vm.heapSize=512
+          disk.dataPartition.size=16G
+          hw.lcd.density=440
+          hw.lcd.width=1080
+          hw.lcd.height=2280
+          hw.keyboard=yes
+          hw.gpu.enabled=yes
+          hw.gpu.mode=swiftshader_indirect
+          fastboot.forceColdBoot=yes
+          EOF
+          cat > "$ANDROID_AVD_HOME/erbium.ini" <<EOF
+          avd.ini.encoding=UTF-8
+          path=$AVD_DIR
+          path.rel=avd/erbium.avd
+          EOF
+          "$ANDROID_HOME/emulator/emulator" -list-avds
+
+      - name: Boot emulator (KVM + SwiftShader)
+        run: |
+          set -e
+          ls -la /dev/kvm || true
+          sudo chmod 666 /dev/kvm || true
+          adb start-server 2>/dev/null || true
+          nohup "$ANDROID_HOME/emulator/emulator" -avd erbium \
+            -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect -memory 6144 -cores 4 \
+            -timezone Asia/Baghdad \
+            > /tmp/emulator.log 2>&1 &
+          EMU_PID=$!
+          ADB_UP=0
+          for i in $(seq 1 60); do
+            if ! kill -0 $EMU_PID 2>/dev/null; then
+              echo "EMULATOR PROCESS DIED — log tail:"; tail -50 /tmp/emulator.log; exit 1
+            fi
+            if adb devices 2>/dev/null | grep -qE "emulator-[0-9]+[[:space:]]+device"; then
+              ADB_UP=1; break
+            fi
+            sleep 5
+          done
+          [ "$ADB_UP" = "1" ] || { echo "ADB never came up"; tail -50 /tmp/emulator.log; exit 1; }
+          timeout 900 adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 5; done' \
+            || { adb reconnect offline || true; sleep 5; \
+                 timeout 300 adb wait-for-device shell 'while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 5; done'; } \
+            || { echo "BOOT TIMED OUT"; tail -80 /tmp/emulator.log; exit 1; }
+          adb shell getprop ro.build.version.release
+          adb shell getprop ro.product.cpu.abilist
+          echo "Emulator booted."
+
+      # ── fetch the two APKs ────────────────────────────────────────────────
+      - name: Fetch APKs (OGFN manager + patched Fortnite)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p artifacts
+          if [ -n "${{ github.event.inputs.ogfn_apk_url }}" ]; then
+            curl -fsSL --retry 3 -o artifacts/ogfn.apk "${{ github.event.inputs.ogfn_apk_url }}"
+          else
+            gh release download ogfn-assets --pattern "ogfn-by-dhyper.apk" \
+              --output artifacts/ogfn.apk --repo "$GITHUB_REPOSITORY"
+          fi
+          if [ -n "${{ github.event.inputs.game_apk_url }}" ]; then
+            curl -fsSL --retry 3 -o artifacts/fortnite-erbium.apk "${{ github.event.inputs.game_apk_url }}"
+          else
+            gh release download ogfn-assets --pattern "fortnite-*-erbium-signed.apk" \
+              --output artifacts/fortnite-erbium.apk --repo "$GITHUB_REPOSITORY"
+          fi
+          ls -la artifacts/
+          file artifacts/*.apk
+
+      - name: Free disk before the heavy test
+        run: |
+          sudo apt-get clean || true
+          rm -rf "$HOME/android-sdk/.temp" /tmp/clt.zip 2>/dev/null || true
+          df -h /
+
+      # ── THE closed loop ───────────────────────────────────────────────────
+      - name: Run OGFN + Erbium closed-loop pipeline
+        run: |
+          set -o pipefail
+          QUICK_FLAG=""
+          [ "${{ github.event.inputs.quick }}" = "true" ] && QUICK_FLAG="--quick"
+          bash scripts/android/ogfn_pipeline.sh \
+            --ogfn artifacts/ogfn.apk \
+            --game artifacts/fortnite-erbium.apk \
+            $QUICK_FLAG --keep-going 2>&1 | tee artifacts/pipeline-live.log
+          echo "PIPELINE_EXIT=$?" >> "$GITHUB_ENV"
+
+      - name: Summarize verdict
+        if: always()
+        run: |
+          echo "════════ VERDICT ════════"
+          cat artifacts/VERDICT.txt 2>/dev/null || echo "(no verdict — pipeline crashed early)"
+          echo "═════════════════════════"
+          ls -la artifacts/shots/ 2>/dev/null | tail -20 || true
+
+      - name: Keep-alive (optional live debugging)
+        if: ${{ github.event.inputs.keep_alive != '0' && github.event.inputs.keep_alive != '' }}
+        run: |
+          echo "Runner stays alive ${{ github.event.inputs.keep_alive }} minutes for debugging."
+          sleep $(( ${{ github.event.inputs.keep_alive }} * 60 ))
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ogfn-bringup-${{ github.event.inputs.version || '18.40-OGFN' }}-${{ github.run_id }}
+          path: |
+            artifacts/
+            /tmp/emulator.log
+          if-no-files-found: warn
+          retention-days: 14
