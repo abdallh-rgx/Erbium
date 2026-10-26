@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 300
     env:
       API_LEVEL: '30'          # x86_64 image w/ ndk_translation (runs arm64)
-      IMAGE_FLAVOR: google_apis  # allows adb root → no Shizuku needed
+      IMAGE_FLAVOR: google_apis  # proven: ndk_translation boots (run1). user build → pipeline PATH B (UI onboarding). switch to 'default' for PATH A (adb root)
       ANDROID_AVD_HOME: /home/runner/.android/avd
       PATH: /home/runner/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     steps:
@@ -77,6 +77,10 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "emulator" \
             "system-images;android-30;${IMAGE_FLAVOR};x86_64" > /dev/null
+          # sanity: the default image must have ndk_translation (arm64 in
+          # abilist) or the game will never come up
+          grep -q "arm64-v8a" "$ANDROID_HOME/system-images/android-30/default/x86_64/source.properties" \
+            || echo "WARN: arm64 not advertised in source.properties — checking at boot instead"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 

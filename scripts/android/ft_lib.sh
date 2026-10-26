@@ -105,7 +105,7 @@ adb_root_try() {
   if [ "$(adb_dev shell id 2>/dev/null | tr -d '\r')" = "uid=0(root)" ]; then
     ADB_ROOTED=1; return 0
   fi
-  adb_dev root >/dev/null 2>&1
+  adb_dev root 2>&1 | head -2 || true
   # `adb root` RESTARTS adbd → the device flaps offline for a few seconds.
   # Poll up to 30s for adbd to come back as root before concluding anything.
   local t0=$(_now_s)
@@ -249,7 +249,9 @@ is_installed() {
   while [ $(( $(_now_s) - t0 )) -lt 30 ]; do
     out=$(shell_dev pm list packages 2>/dev/null | tr -d '\r')
     if [ -n "$out" ]; then
-      printf '%s\n' "$out" | grep -q "package:$GAME_PKG$" && return 0
+      case "$out" in
+        *"package:$GAME_PKG") return 0 ;;
+      esac
       return 1  # pm answered — the package really isn't there
     fi
     sleep 2  # device reconnecting — try again
@@ -262,8 +264,13 @@ install_apk() {  # <apk> [package]
   [ -f "$apk" ] || { err "APK not found: $apk"; return 1; }
   log "installing $apk ..."
   adb_dev install -r -t "$apk" 2>&1 | tee -a "$ARTIFACTS/install.log" | tail -2
-  shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$pkg$" \
-    || { err "install failed — see $ARTIFACTS/install.log"; return 1; }
+  # NOTE: no `cmd | grep -q` here — with pipefail, grep -q closing early
+  # SIGPIPEs the upstream command and produces a FALSE failure. Capture,
+  # then count.
+  sleep 3   # let package manager settle right after install
+  local _n=0
+  _n=$(shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -c "package:$pkg$" || true)
+  [ "${_n:-0}" -ge 1 ] || { err "install failed (verify: $_n) — see $ARTIFACTS/install.log"; return 1; }
   ok "installed ($pkg)"
 }
 
@@ -529,6 +536,35 @@ ui_wait_text() {  # <text> [timeout_s]
     [ $(( $(_now_s) - t0 )) -ge "$timeout" ] && { err "ui: '$text' never appeared"; return 1; }
     sleep 3
   done
+}
+
+# tap EVERY element whose text/content matches (for stacked checkboxes etc.)
+ui_tap_all() {  # <text> → taps all matches, prints count
+  local xml; xml=$(ui_dump) || return 1
+  local coords
+  coords=$(python3 - "$xml" "$1" <<'PY'
+import sys, re
+xml, needle = sys.argv[1], sys.argv[2]
+for m in re.finditer(r'<node[^>]*/>|<node[^>]*>', xml):
+    tag = m.group(0)
+    tm = re.search(r'text="([^"]*)"', tag)
+    dm = re.search(r'content-desc="([^"]*)"', tag)
+    hay = ((tm.group(1) if tm else "") + " " + (dm.group(1) if dm else "")).lower()
+    if needle.lower() in hay:
+        bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        if bm:
+            x = (int(bm.group(1)) + int(bm.group(3))) // 2
+            y = (int(bm.group(2)) + int(bm.group(4))) // 2
+            print(f"{x} {y}")
+PY
+)
+  local n=0
+  while read -r x y; do
+    [ -z "$x" ] && continue
+    log "ui: tapping '$1' match at $x $y"
+    shell_dev input tap "$x" "$y"; sleep 1; n=$((n+1))
+  done <<< "$coords"
+  echo "$n"
 }
 
 # ─────────────────────────── browser + login flow ──────────────────────────

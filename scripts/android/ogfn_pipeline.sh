@@ -129,7 +129,7 @@ esac
 # ═══════════════════ 1. OGFN backend (all via adb) ════════════════════════
 hr "phase 1 — OGFN Manager + LawinServer backend"
 
-if ! shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$OGFN_PKG$"; then
+if [ "$(shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -c "package:$OGFN_PKG$" || true)" -lt 1 ]; then
   install_apk "$OGFN_APK" "$OGFN_PKG" || die "cannot install OGFN manager"
 else
   ok "OGFN manager already installed"
@@ -144,45 +144,112 @@ ok "battery-optimization whitelisted ($OGFN_PKG, $GAME_PKG)"
 shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
 sleep 1
 
-# 1c. deploy LawinServer: extract from the ogfn apk → tar → push → untar
-#     (this is what the onboarding "SettingUp" step does, minus the UI;
-#      tar keeps the thousands of node_modules files into ONE adb transfer)
+# 1c+1d. Deploy LawinServer + permanent_id — TWO PATHS:
+#   PATH A (adb root): direct file deployment — fast, deterministic.
+#   PATH B (no root, user-build image): drive the app's own onboarding UI
+#     (Compose — visible to uiautomator). The app then copies LawinServer
+#     itself and writes permanent_id itself.
 WORK_LS="$(mktemp -d)"
-log "extracting LawinServer from $(basename "$OGFN_APK")..."
-unzip -o -q "$OGFN_APK" "assets/LawinServer-main/*" -d "$WORK_LS" \
-  || die "cannot extract LawinServer from OGFN apk"
-tar -C "$WORK_LS/assets/LawinServer-main" -czf "$WORK_LS/lawin.tgz" .
-ls -la "$WORK_LS/lawin.tgz"
-shell_dev "rm -rf /data/local/tmp/lawin.tgz /data/data/$OGFN_PKG/files/LawinServer" || true
-adb_dev push "$WORK_LS/lawin.tgz" /data/local/tmp/lawin.tgz \
-  || die "cannot push LawinServer tarball"
-shell_dev "mkdir -p /data/data/$OGFN_PKG/files/LawinServer && tar -xzf /data/local/tmp/lawin.tgz -C /data/data/$OGFN_PKG/files/LawinServer && rm -f /data/local/tmp/lawin.tgz" \
-  || die "cannot extract LawinServer on device"
-shell_dev "ls /data/data/$OGFN_PKG/files/LawinServer/index.js" >/dev/null 2>&1 \
-  || die "index.js not in place after untar"
-ok "LawinServer deployed to files/LawinServer"
+ONBOARDING_DONE=0
 
-# 1d. mark onboarding complete: permanent_id in backend_prefs
-#     (BackendService checks ONLY this before starting node)
-shell_dev "mkdir -p /data/data/$OGFN_PKG/shared_prefs" || true
-cat > "$WORK_LS/backend_prefs.xml" <<'EOF'
+if [ "${ADB_ROOTED:-0}" = "1" ]; then
+  # ── PATH A: direct deployment (root) ────────────────────────────────
+  log "PATH A: direct LawinServer deployment via adb root"
+  unzip -o -q "$OGFN_APK" "assets/LawinServer-main/*" -d "$WORK_LS" \
+    || die "cannot extract LawinServer from OGFN apk"
+  tar -C "$WORK_LS/assets/LawinServer-main" -czf "$WORK_LS/lawin.tgz" .
+  ls -la "$WORK_LS/lawin.tgz"
+  shell_dev "rm -rf /data/local/tmp/lawin.tgz /data/data/$OGFN_PKG/files/LawinServer" || true
+  adb_dev push "$WORK_LS/lawin.tgz" /data/local/tmp/lawin.tgz \
+    || die "cannot push LawinServer tarball"
+  shell_dev "mkdir -p /data/data/$OGFN_PKG/files/LawinServer && tar -xzf /data/local/tmp/lawin.tgz -C /data/data/$OGFN_PKG/files/LawinServer && rm -f /data/local/tmp/lawin.tgz" \
+    || die "cannot extract LawinServer on device"
+  shell_dev "ls /data/data/$OGFN_PKG/files/LawinServer/index.js" >/dev/null 2>&1 \
+    || die "index.js not in place after untar"
+  ok "LawinServer deployed to files/LawinServer"
+
+  shell_dev "mkdir -p /data/data/$OGFN_PKG/shared_prefs" || true
+  cat > "$WORK_LS/backend_prefs.xml" <<'EOF'
 <?xml version='1.0' encoding='utf-8' standalone='yes' ?>
 <map>
     <string name="permanent_id">ErbiumCI</string>
 </map>
 EOF
-adb_dev push "$WORK_LS/backend_prefs.xml" "/data/local/tmp/backend_prefs.xml" \
-  || die "cannot push backend_prefs.xml"
-shell_dev "cp /data/local/tmp/backend_prefs.xml /data/data/$OGFN_PKG/shared_prefs/backend_prefs.xml && rm -f /data/local/tmp/backend_prefs.xml" \
-  || die "cannot install backend_prefs.xml"
-# fix ownership (app uid) so the app can read its own prefs/files
-APPUID=$(shell_dev "stat -c '%u' /data/data/$OGFN_PKG" 2>/dev/null | tr -d '\r')
-[ -n "$APPUID" ] && shell_dev "chown -R ${APPUID}:${APPUID} /data/data/$OGFN_PKG/files/LawinServer /data/data/$OGFN_PKG/shared_prefs" || true
-ok "onboarding marked complete (permanent_id=ErbiumCI, uid=${APPUID:-?})"
+  adb_dev push "$WORK_LS/backend_prefs.xml" "/data/local/tmp/backend_prefs.xml" \
+    || die "cannot push backend_prefs.xml"
+  shell_dev "cp /data/local/tmp/backend_prefs.xml /data/data/$OGFN_PKG/shared_prefs/backend_prefs.xml && rm -f /data/local/tmp/backend_prefs.xml" \
+    || die "cannot install backend_prefs.xml"
+  APPUID=$(shell_dev "stat -c '%u' /data/data/$OGFN_PKG" 2>/dev/null | tr -d '\r')
+  [ -n "$APPUID" ] && shell_dev "chown -R ${APPUID}:${APPUID} /data/data/$OGFN_PKG/files/LawinServer /data/data/$OGFN_PKG/shared_prefs" || true
+  ok "onboarding marked complete (permanent_id=ErbiumCI, uid=${APPUID:-?})"
+  ONBOARDING_DONE=1
+else
+  # ── PATH B: drive the app's own onboarding (no root) ───────────────
+  log "PATH B: OGFN onboarding via UI automation (no adb root on this image)"
+  shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
+  sleep 6
+  screenshot ogfn_launch
+
+  # step 1: Disclaimer — three "I understand ..." checkboxes + CONTINUE
+  if ui_wait_text "Important Notice" 60; then
+    ui_tap_all "I understand" >/dev/null; sleep 1
+    screenshot ogfn_disclaimer
+    ui_tap_text "CONTINUE" || tap_pct 50 93
+    sleep 3
+  else
+    warn "disclaimer screen not found — maybe already onboarded?"
+  fi
+
+  # step 2: InputName — field + CONFIRM
+  if ui_wait_text "Username" 45; then
+    local_xy=$(ui_find "Username") && shell_dev input tap $local_xy; sleep 1
+    type_text "ErbiumCI"; sleep 1
+    key_enter 2>/dev/null || true
+    screenshot ogfn_name
+    ui_tap_text "CONFIRM" || tap_pct 50 93
+    sleep 3
+  else
+    warn "username screen not found"
+  fi
+
+  # step 3: DeveloperSafety — button starts a countdown ("PROCEED IN Xs")
+  #         first tap arms it; wait for the plain "PROCEED" then tap again.
+  if ui_wait_text "PROCEED" 45; then
+    ui_tap_text "PROCEED" || tap_pct 50 93      # arms the countdown
+    sleep 2
+    # wait for the countdown to finish (the "IN " disappears)
+    T0=$(timer_start)
+    while [ "$(timer_s)" -lt 40 ]; do
+      xy=$(ui_find "PROCEED IN") || break        # countdown gone
+      sleep 3
+    done
+    ui_tap_text "PROCEED" || tap_pct 50 93       # actually proceed
+    sleep 3
+    screenshot ogfn_safety
+  else
+    warn "safety screen not found"
+  fi
+
+  # step 4: SettingUp — the app extracts LawinServer + writes permanent_id.
+  #         Ends with StepSuccess "Have fun, <name>".
+  if ui_wait_text "Have fun" 240; then
+    screenshot ogfn_success
+    ok "onboarding completed (app extracted LawinServer + wrote permanent_id)"
+    ONBOARDING_DONE=1
+    # finish: any button / back
+    ui_tap_text "START" 2>/dev/null || ui_tap_text "GO" 2>/dev/null || key_back || true
+    sleep 2
+    shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
+    sleep 2
+  else
+    screenshot ogfn_setup_stuck
+    warn "onboarding 'Have fun' never appeared — backend start may fail"
+  fi
+fi
 
 # 1e. ask OGFN itself whether it agrees (result=1 = complete)
 ONB=$(shell_dev "am broadcast -a ${OGFN_PKG}.CHECK_ONBOARDING" 2>/dev/null | grep -oE 'result=[0-9]+' | head -1)
-log "CHECK_ONBOARDING → ${ONB:-?} (result=1 means complete)"
+log "CHECK_ONBOARDING → ${ONB:-?} (result=1 means complete; onboarding_done=$ONBOARDING_DONE)"
 
 # 1f. START THE BACKEND
 logcat_clear
@@ -213,7 +280,7 @@ verdict PASS "backend up (LawinServer :8080, matchmaker :3001)"
 
 # ═══════════════ 2. patched game install + launch ═════════════════════════
 hr "phase 2 — patched Fortnite (Erbium inside)"
-if ! shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -q "package:$GAME_PKG$"; then
+if [ "$(shell_dev pm list packages 2>/dev/null | tr -d '\r' | grep -c "package:$GAME_PKG$" || true)" -lt 1 ]; then
   install_apk "$GAME_APK" "$GAME_PKG" || die "cannot install patched fortnite ($GAME_PKG)"
 else
   ok "patched fortnite already installed ($GAME_PKG)"
