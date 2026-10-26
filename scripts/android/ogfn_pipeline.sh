@@ -160,15 +160,9 @@ if unzip -p "$OGFN_APK" classes.dex 2>/dev/null | grep -qa "ErbiumCI"; then
 fi
 
 if [ "$OGFN_IS_PATCHED" = "1" ]; then
-  log "OGFN is the Erbium-patched build — launching it once (no touch needed)"
-  shell_dev "am start -n $OGFN_PKG/.MainActivity" >/dev/null 2>&1 || true
-  sleep 10
-  screenshot ogfn_autosetup
-  # give initialize() time to extract node_modules (best effort; the
-  # broadcast retry loop below tolerates a missing index.js anyway)
-  sleep 20
-  shell_dev "am force-stop $OGFN_PKG" >/dev/null 2>&1 || true
-  sleep 2
+  log "OGFN is the Erbium-patched build (receiver-injected) — the FIRST"
+  log "broadcast itself writes permanent_id + extracts LawinServer. The"
+  log "retry loop below re-fires until node is up."
   ONBOARDING_DONE=1
 elif [ "${ADB_ROOTED:-0}" = "1" ]; then
   # ── PATH A: direct deployment (root) ────────────────────────────────
